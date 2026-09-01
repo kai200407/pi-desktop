@@ -20,7 +20,7 @@ const fs = require("node:fs");
 // 业务模块
 const { PiEngine } = require("./pi-engine");
 const { BrowserManager, attachStealth } = require("./browser");
-const { SessionManager, getPiAgentDir, decodeSessionDir } = require("./session-mgmt");
+const { SessionManager, getPiAgentDir, decodeSessionDir, dirExists } = require("./session-mgmt");
 const { registerIpcHandlers } = require("./ipc-handlers");
 
 // 辅助模块（Cookie导入、Chrome控制）
@@ -138,6 +138,12 @@ function initModules() {
 			pushSessionInfo: piEngine.pushSessionInfo.bind(piEngine),
 			send: piEngine.send.bind(piEngine),
 			getPi: () => piEngine.pi,
+			// switchWorkspace 是 SessionManager 的方法，但 ipc-handlers 从 piEngine 解构
+			switchWorkspace: sessionMgr.switchWorkspace.bind(sessionMgr),
+			// ipc-handlers 还从 piEngine 解构这些（原 main.js 里是全局函数）
+			serializeMessages,
+			sessionFileOwner: sessionMgr.sessionFileOwner.bind(sessionMgr),
+			getPiAgentDir: sessionMgr.getPiAgentDir.bind(sessionMgr),
 		},
 		browserMgr: {
 			createBrowserView: browserMgr.createBrowserView.bind(browserMgr),
@@ -156,15 +162,20 @@ function initModules() {
 		},
 		sessionMgr: {
 			switchWorkspace: sessionMgr.switchWorkspace.bind(sessionMgr),
+			// countBranches / readBranchDetails / deriveSessionName / decodeSessionDir
+			// 是 SessionManager 的实例方法（内部委托给模块级纯函数），bind 即可
 			countBranches: sessionMgr.countBranches.bind(sessionMgr),
 			readBranchDetails: sessionMgr.readBranchDetails.bind(sessionMgr),
 			deriveSessionName: sessionMgr.deriveSessionName.bind(sessionMgr),
-			decodeSessionDir,
-			dirExists: sessionMgr.dirExists.bind(sessionMgr),
+			decodeSessionDir: sessionMgr.decodeSessionDir.bind(sessionMgr),
+			// dirExists 是纯函数（模块级导出），SessionManager 上没有此实例方法，
+			// 不能 .bind(sessionMgr)，直接从 session-mgmt 模块导入传递
+			dirExists,
 			listSessionsGrouped: sessionMgr.listSessionsGrouped.bind(sessionMgr),
 			listSessions: sessionMgr.listSessions.bind(sessionMgr),
 			switchSession: sessionMgr.switchSession.bind(sessionMgr),
 			deleteSession: sessionMgr.deleteSession.bind(sessionMgr),
+			renameSession: sessionMgr.renameSession.bind(sessionMgr),
 			listBranches: sessionMgr.listBranches.bind(sessionMgr),
 			switchToBranch: sessionMgr.switchToBranch.bind(sessionMgr),
 		},
