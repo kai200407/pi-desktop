@@ -2,7 +2,7 @@
   "name": "pi-desktop",
   "version": "0.1.0",
   "description": "Codex 风格三栏桌面端，引擎用 pi",
-  "main": "main.js",
+  "main": "src/main/index.js",
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
