@@ -198,15 +198,8 @@ function initModules() {
 		attachStealth(wc);
 	});
 
-	// ===== 修改：先设置初始 conversation，再创建浏览器标签 =====
-	// 这样 createBrowserView 才能拿到正确的 conversation session，而不是降级到默认 session
-	const initialCwd = piEngine.pi?.cwd || conf.cwd || process.cwd();
-	if (initialCwd) {
-		// 仅设置 ID（不重建标签，因为还没有标签）
-		browserMgr.currentConversationId = initialCwd;
-		browserMgr.sessionManager.switchConversation(initialCwd);
-		console.log('[Main] 浏览器初始 conversation:', initialCwd);
-	}
+	// ===== 已回滚：不再初始化 conversation session =====
+	// 浏览器统一使用 persist:pi-browser 单一共享分区，不随工作区切换。
 
 	// 6. 创建首个浏览器标签（加载主页）。
 	// 【背景】旧 main.js 在 createWindow() 里调 createBrowserView()；重构后丢了这个调用，

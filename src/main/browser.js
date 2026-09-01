@@ -6,7 +6,8 @@
 //   3. 下载管理：hookDownloads（conversation 分区的 will-download 接管）
 //   4. bounds 定位：applyBrowserBounds（活动标签贴渲染层上报的 rect，其余缩 0x0）
 //   5. WebContentsView 创建与配置：attachStealth（UA/Sec-CH-UA/userAgentData 三处伪装）
-//   6. 【新增】Session 隔离：ConversationSessionManager 按 conversation（cwd）隔离 cookies/storage
+//   6. 【已回滚】Session 隔离（ConversationSessionManager）体验不佳，
+//      统一使用单一共享分区 persist:pi-browser，登录态跨工作区共享。
 //
 // 设计说明：
 //   · 零构建、纯 CommonJS，与 main.js 保持一致的风格。
@@ -16,14 +17,10 @@
 //   · 主页 / 可见性等配置项通过 deps.loadConf() / deps.saveConf() 读写 pi-desktop.json。
 //   · 本模块不碰 pi 引擎、会话管理、IPC 注册 —— 那些仍留在 main.js。
 //
-// Session 隔离架构（方案 A）：
-//   · 每个 conversation（通常是 cwd 路径）对应独立的 Electron Session
-//   · cookies、localStorage、cache 完全隔离，登录态互不干扰
-//   · LRU 缓存最多 5 个 session，超过时淘汰最久未使用的
-//   · 切换 conversation 时自动切换浏览器 session
+// 会话隔离已回滚（用户体验差，每次切工作区要重登），详见文件顶部「关键设计点 6」
 //
 // 已实测确认的关键点（勿改）：
-//   1. persist:conv-* 分区让 cookie/localStorage 落盘 —— 密码输一次，以后免登录
+//   1. persist:pi-browser 分区让 cookie/localStorage 落盘 —— 密码输一次，以后免登录
 //   2. Google 会拒绝「嵌入式浏览器」登录，破绽有三处缺一不可（UA / userAgentData.brands
 //      / Sec-CH-UA 请求头），下面统一伪装成与本机真实 Chrome 一致的形态
 //   3. backgroundThrottling:false 关掉后台节流 —— 否则窗口不在前台时 Chromium 把页面
@@ -41,7 +38,13 @@ const {
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
-const { ConversationSessionManager } = require("./conversation-session-manager");
+// 【已回滚】不再使用 ConversationSessionManager —— 会话隔离体验差，
+// 统一用单一共享分区 persist:pi-browser（登录态跨工作区共享，符合用户习惯）。
+// 保留文件 src/main/conversation-session-manager.js 以便将来重新启用。
+
+// 单一共享分区名：所有浏览器标签页/弹窗共用一个 session，登录态互通。
+// 历史数据落盘在 ~/Library/Application Support/pi-desktop/Partitions/pi-browser/。
+const BROWSER_PARTITION = "persist:pi-browser";
 
 // ---------------------------------------------------------------------------
 // UA / 指纹伪装常量
@@ -103,15 +106,7 @@ class BrowserManager {
 		this.browserVisible = this._loadConf().browserVisible !== false;
 		this.lastBounds = { x: 0, y: 0, width: 0, height: 0 };
 
-		// ===== 新增：Session 隔离管理器 =====
-		this.sessionManager = new ConversationSessionManager({
-			maxCached: 5  // 最多缓存 5 个 conversation 的 session
-		});
-
-		// ===== 新增：当前 conversation ID（通常是 cwd 路径）=====
-		this.currentConversationId = null;
-
-		console.log('[BrowserManager] 初始化, Session 隔离已启用');
+		console.log('[BrowserManager] 初始化（单一共享 session 模式，partition:', BROWSER_PARTITION, '）');
 
 		// OAuth/登录弹窗集合（用 Map 维护以便集中清理）。
 		// 弹窗共享 persist:pi-browser session —— 登录态互遇，弹窗里登了主页面立即生效。
@@ -157,9 +152,7 @@ class BrowserManager {
 	// 特点：尺寸小、无地址栏、关窗即终、焦点回主窗。所有弹窗都过 attachStealth。
 	openAuthPopup(url) {
 		// 使用当前 conversation 的 session（如果有），否则用默认
-		const ses = this.currentConversationId
-			? this.sessionManager.getOrCreateSession(this.currentConversationId)
-			: session.fromPartition('persist:pi-browser-default');
+		const ses = this._getSharedSession();
 		const pop = new BrowserWindow({
 			width: 480,
 			height: 640,
@@ -199,56 +192,16 @@ class BrowserManager {
 		return pop;
 	}
 
-	// -----------------------------------------------------------------------
-	// Conversation 切换：切换浏览器 session 到指定 conversation
-	// -----------------------------------------------------------------------
-	switchConversation(conversationId) {
-		console.log('[BrowserManager] switchConversation:', this.currentConversationId, '→', conversationId);
+	// 单一共享 session（所有标签页/弹窗共用，登录态互通）
+	_getSharedSession() {
+		return session.fromPartition(BROWSER_PARTITION);
+	}
 
-		// 如果 conversationId 没变，直接返回（避免无谓重建）
-		if (this.currentConversationId === conversationId) {
-			console.log('[BrowserManager] conversation 未变化，跳过重重建');
-			return this.sessionManager.getOrCreateSession(conversationId);
-		}
-
-		// 切换 session
-		const newSession = this.sessionManager.switchConversation(conversationId);
-		this.currentConversationId = conversationId;
-
-		// 确保新 session 的下载钩子已挂载
-		if (this._downloadHooked) {
-			this._hookSessionDownloads(newSession);
-		}
-
-		// 【关键修复】销毁所有旧标签页并用新 session 重建，实现真正的登录态隔离
-		// 背景：WebContentsView 在创建时绑定 session，事后切换 currentConversationId
-		// 不会改变已存在 view 的 session，导致 cookies 仍然共享 → 登录态串号
-		if (this.browserTabs.length > 0) {
-			console.log('[BrowserManager] 销毁', this.browserTabs.length, '个旧标签页，用新 session 重建');
-
-			// 记录旧标签页的 URL 以便恢复
-			const oldUrls = this.browserTabs.map(t => {
-				try { return t.view.webContents.getURL(); } catch { return null; }
-			});
-
-			// 销毁所有旧 view
-			const win = this._getWin();
-			for (const t of this.browserTabs) {
-				try { win && win.contentView.removeChildView(t.view); } catch {}
-				try { t.view.webContents.close(); } catch {}
-			}
-			this.browserTabs = [];
-			this.activeTabId = null;
-			this.browserView = null;
-
-			// 用新 session 重建第一个标签页（恢复之前的活动 URL 或主页）
-			const firstUrl = oldUrls.find(u => u && /^https?:/i.test(u)) || this.HOME_URL;
-			this.createBrowserView(firstUrl);
-			this.applyBrowserBounds();
-			this.pushTabs();
-		}
-
-		return newSession;
+	// 回滚后保留的空方法：IPC handler 依然会调用，但不做任何事
+	// （单一会话共享下，切换工作区不影响浏览器登录态）
+	switchConversation(_conversationId) {
+		// no-op：单一共享 session 不需要切换
+		return this._getSharedSession();
 	}
 
 	// -----------------------------------------------------------------------
@@ -283,16 +236,8 @@ class BrowserManager {
 		}
 		if (process.env.PI_DESKTOP_DEBUG_BOUNDS) console.log("[tab] createBrowserView 继续，win ready");
 
-		// ===== 修改：使用 conversation 的 session（如果有）=====
-		let ses;
-		if (this.currentConversationId) {
-			ses = this.sessionManager.getOrCreateSession(this.currentConversationId);
-			console.log('[BrowserManager] 使用 conversation session:', this.currentConversationId);
-		} else {
-			// 降级：使用默认 session（兼容性）
-			console.warn('[BrowserManager] 未设置 conversationId，使用默认 session');
-			ses = session.fromPartition('persist:pi-browser-default');
-		}
+		// ===== 回滚：使用单一共享 session =====
+		const ses = this._getSharedSession();
 
 		// (1) UA：去掉 Electron / 应用名，并把 Chrome 版本规整成 x.0.0.0（真 Chrome 的形态）
 		const ua = ses.getUserAgent()
@@ -320,7 +265,7 @@ class BrowserManager {
 				cb(["geolocation", "clipboard-read", "clipboard-sanitized-write"].includes(permission));
 			});
 
-			console.log('[BrowserManager] session 配置完成:', this.currentConversationId || 'default');
+			console.log('[BrowserManager] session 配置完成（共享模式）');
 		}
 
 		this.browserView = new WebContentsView({
@@ -597,19 +542,8 @@ class BrowserManager {
 		if (this._downloadHooked) return;
 		this._downloadHooked = true;
 
-		// 【兼容性】hook 所有可能的 session（默认 + 各个 conversation）
-		// 默认 session
-		const defaultSes = session.fromPartition("persist:pi-browser-default");
-		this._hookSessionDownloads(defaultSes);
-
-		// 当前 conversation session
-		if (this.currentConversationId) {
-			const convSes = this.sessionManager.getOrCreateSession(this.currentConversationId);
-			this._hookSessionDownloads(convSes);
-		}
-
-		// 注意：后续新创建的 conversation session 会在 switchConversation 时
-		// 由 ConversationSessionManager 创建，这里需要确保新 session 也被 hook
+		// 回滚：只 hook 单一共享 session
+		this._hookSessionDownloads(this._getSharedSession());
 	}
 
 	// 给指定 session 挂上下载钩子（带去重，避免重复挂载）
@@ -637,10 +571,7 @@ class BrowserManager {
 		for (const [, pop] of this.popupWindows) { try { pop.destroy(); } catch {} }
 		this.popupWindows.clear();
 
-		// 清理 session 管理器
-		if (this.sessionManager) {
-			this.sessionManager.cleanup();
-		}
+		// 无其他清理（回滚后无 sessionManager）
 	}
 }
 

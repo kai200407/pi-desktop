@@ -57,7 +57,7 @@ function registerIpcHandlers(deps) {
 	const {
 		createBrowserView, closeTab, activateTab,
 		applyBrowserBounds, pushTabs,
-		switchConversation: switchBrowserConversation,  // 新增：浏览器 conversation 切换
+		// 回滚后 switchConversation 是 no-op，不再需要解构
 	} = browserMgr;
 	const HOME_URL = browserMgr.HOME_URL;
 	// 这些是可变量，每次都要取最新值，不能解构固定
@@ -193,13 +193,6 @@ function registerIpcHandlers(deps) {
 		try {
 			if (!fs.statSync(dir).isDirectory()) throw new Error("不是目录");
 			await switchWorkspace(dir);
-
-			// ===== 新增：通知浏览器管理器切换 conversation =====
-			if (switchBrowserConversation) {
-				switchBrowserConversation(dir);
-				console.log('[IPC] 浏览器 conversation 已切换:', dir);
-			}
-
 			return dir;
 		} catch (err) {
 			send("error", { message: `切换工作区失败：${err.message}` });
@@ -216,13 +209,6 @@ function registerIpcHandlers(deps) {
 		if (r.canceled || !r.filePaths[0]) return null;
 		const next = r.filePaths[0];
 		await switchWorkspace(next);
-
-		// ===== 新增：通知浏览器管理器切换 conversation =====
-		if (switchBrowserConversation) {
-			switchBrowserConversation(next);
-			console.log('[IPC] 浏览器 conversation 已切换:', next);
-		}
-
 		return next;
 	});
 
@@ -439,13 +425,6 @@ function registerIpcHandlers(deps) {
 			await runtime.switchSession(file);
 			bindSession();
 			pushSessionInfo();
-
-			// ===== 新增：通知浏览器管理器切换 conversation =====
-			const currentCwd = pi()?.cwd;
-			if (currentCwd && switchBrowserConversation) {
-				switchBrowserConversation(currentCwd);
-				console.log('[IPC] 浏览器 conversation 已切换:', currentCwd);
-			}
 
 			// 回灌历史消息，让界面能重建对话
 			const msgs = runtime.session.messages || [];
@@ -750,6 +729,11 @@ function registerIpcHandlers(deps) {
 		}
 	});
 
+	// 渲染层日志穿透：主进程 stdout 打印（无 DevTools 场景诊断用）
+	ipcMain.on("debug:log", (_e, msg) => {
+		console.log(msg);
+	});
+
 	// 给 agent 用：右栏浏览器的 CDP 端口
 	ipcMain.handle("browser:cdpInfo", () => ({ port: CDP_PORT }));
 
@@ -819,33 +803,13 @@ function registerIpcHandlers(deps) {
 	});
 
 	// 列出内置浏览器分区里的 Google cookie 名单（调试/验收用）
-	// 【修改】支持 conversation 隔离：列出所有 conversation session 的 cookies
+	// 回滚后：只查单一共享分区的 cookies
 	ipcMain.handle("debug:listGoogleCookies", async () => {
-		// 获取所有已缓存的 session
-		const sessions = [];
-		if (browserMgr.sessionManager && browserMgr.sessionManager.sessions) {
-			for (const [convId, data] of browserMgr.sessionManager.sessions) {
-				sessions.push({ convId, session: data.session });
-			}
-		}
-		// 如果没有 conversation session，至少列出默认 session
-		if (sessions.length === 0) {
-			sessions.push({
-				convId: 'default',
-				session: session.fromPartition("persist:pi-browser-default")
-			});
-		}
-
-		// 收集所有 session 的 Google cookies
-		const allCookies = [];
-		for (const { convId, session: sess } of sessions) {
-			const cookies = await sess.cookies.get({});
-			const googleCookies = cookies
-				.filter((c) => /google|youtube|gstatic|ggpht|ytimg/.test(c.domain))
-				.map((c) => `[${convId}] ${c.domain} ${c.name} secure=${c.secure?"1":"0"} httpOnly=${c.httpOnly?"1":"0"}`);
-			allCookies.push(...googleCookies);
-		}
-		return allCookies;
+		const ses = session.fromPartition("persist:pi-browser");
+		const cookies = await ses.cookies.get({});
+		return cookies
+			.filter((c) => /google|youtube|gstatic|ggpht|ytimg/.test(c.domain))
+			.map((c) => `${c.domain} ${c.name} secure=${c.secure?"1":"0"} httpOnly=${c.httpOnly?"1":"0"}`);
 	});
 
 	// 在当前活动 view 里执行 JS（调试用：读登录态等页面内证据）

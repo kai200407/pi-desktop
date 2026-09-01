@@ -72,6 +72,9 @@ contextBridge.exposeInMainWorld("piAPI", {
 	// 渲染层上报 #browser-slot 的位置，主进程据此定位原生 view
 	browserBounds: (rect) => ipcRenderer.send("browser:bounds", rect),
 
+	// 调试：渲染层日志穿透到主进程 stdout（诊断用）
+	debugLog: (msg) => ipcRenderer.send("debug:log", String(msg)),
+
 	// ---- 主进程 -> 渲染层 事件流 ----
 	onEvent: (cb) => {
 		const handler = (_e, payload) => cb(payload);
