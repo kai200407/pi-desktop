@@ -198,19 +198,22 @@ function initModules() {
 		attachStealth(wc);
 	});
 
+	// ===== 修改：先设置初始 conversation，再创建浏览器标签 =====
+	// 这样 createBrowserView 才能拿到正确的 conversation session，而不是降级到默认 session
+	const initialCwd = piEngine.pi?.cwd || conf.cwd || process.cwd();
+	if (initialCwd) {
+		// 仅设置 ID（不重建标签，因为还没有标签）
+		browserMgr.currentConversationId = initialCwd;
+		browserMgr.sessionManager.switchConversation(initialCwd);
+		console.log('[Main] 浏览器初始 conversation:', initialCwd);
+	}
+
 	// 6. 创建首个浏览器标签（加载主页）。
 	// 【背景】旧 main.js 在 createWindow() 里调 createBrowserView()；重构后丢了这个调用，
 	// 导致 browserMgr.browserView 永远为 null —— 渲染层地址栏/标签栏全空，
 	// 「打开浏览器面板」后没有任何 view 可贴。必须在窗口创建后调用一次。
 	browserMgr.createBrowserView();
 	browserMgr.hookDownloads();
-
-	// ===== 新增：设置浏览器初始 conversation =====
-	const initialCwd = piEngine.pi?.cwd || conf.cwd || process.cwd();
-	if (initialCwd) {
-		browserMgr.switchConversation(initialCwd);
-		console.log('[Main] 浏览器初始 conversation:', initialCwd);
-	}
 
 	// 7. 预加载会话列表（不等待，后台异步执行）
 	sessionMgr.preloadSessions();

@@ -147,7 +147,9 @@
       importResult: $('import-result'),
       // 跨栏协作元素
       shell: $('shell'),
-      btnBrowser: $('btn-browser')
+      btnBrowser: $('btn-browser'),
+      // 工作区指示器（P2：浏览器工作区优化）
+      workspaceBadge: $('browser-workspace-badge')
       // 已移除：btnBrowserInline（#btn-toggle-browser-inline 已随 #context-bar 删除）
     };
 
@@ -776,6 +778,16 @@
       case 'browser_tabs':
         this.renderTabs(evt);
         return true;
+
+      case 'session_info':
+        // 更新浏览器工作区指示器（表示当前浏览器 session 隔离边界）
+        if (this.ui.workspaceBadge) {
+          var cwd = evt.cwd || '';
+          var name = cwd ? cwd.split('/').filter(Boolean).pop() : '--';
+          this.ui.workspaceBadge.textContent = name;
+          this.ui.workspaceBadge.title = '当前浏览器 session 所属工作区（cookies/storage 按工作区隔离）\n' + cwd;
+        }
+        return false;   // 不拦截，让其他模块也处理
     }
     return false;
   };

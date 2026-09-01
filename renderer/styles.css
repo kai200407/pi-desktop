@@ -1603,6 +1603,24 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   border-bottom: 1px solid var(--border);
 }
 
+/* 浏览器工作区指示器：显示当前浏览器 session 所属工作区（登录态隔离边界） */
+.browser-workspace-badge {
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: default;
+  user-select: none;
+}
+
 .url-input {
   flex: 1;
   min-width: 0;

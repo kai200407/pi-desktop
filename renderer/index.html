@@ -345,6 +345,8 @@
             <circle cx="8" cy="12.4" r=".9" />
           </svg>
         </button>
+        <!-- 当前工作区指示器：显示浏览器 session 隔离边界（哪个 conversation 的 cookies） -->
+        <span id="browser-workspace-badge" class="browser-workspace-badge" title="当前浏览器 session 所属工作区（cookies/storage 按工作区隔离）">--</span>
       </div>
 
       <!-- 内容区：原生 view 由主进程贴在 #browser-slot 的 rect 上。

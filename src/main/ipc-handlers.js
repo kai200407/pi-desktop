@@ -449,6 +449,7 @@ function registerIpcHandlers(deps) {
 
 			// 回灌历史消息，让界面能重建对话
 			const msgs = runtime.session.messages || [];
+			console.log('[IPC] pi:switchSession 回灌消息数:', msgs.length, 'file:', file);
 			send("session_restored", { messages: serializeMessages(msgs) });
 		} catch (err) {
 			send("error", { message: `切换会话失败：${err.message}` });

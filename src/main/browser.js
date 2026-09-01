@@ -203,7 +203,13 @@ class BrowserManager {
 	// Conversation 切换：切换浏览器 session 到指定 conversation
 	// -----------------------------------------------------------------------
 	switchConversation(conversationId) {
-		console.log('[BrowserManager] switchConversation:', conversationId);
+		console.log('[BrowserManager] switchConversation:', this.currentConversationId, '→', conversationId);
+
+		// 如果 conversationId 没变，直接返回（避免无谓重建）
+		if (this.currentConversationId === conversationId) {
+			console.log('[BrowserManager] conversation 未变化，跳过重重建');
+			return this.sessionManager.getOrCreateSession(conversationId);
+		}
 
 		// 切换 session
 		const newSession = this.sessionManager.switchConversation(conversationId);
@@ -214,8 +220,33 @@ class BrowserManager {
 			this._hookSessionDownloads(newSession);
 		}
 
-		// TODO: 后续可以添加标签页切换逻辑（每个 conversation 独立的标签页组）
-		// 暂时保持现有标签页不变，只切换底层 session
+		// 【关键修复】销毁所有旧标签页并用新 session 重建，实现真正的登录态隔离
+		// 背景：WebContentsView 在创建时绑定 session，事后切换 currentConversationId
+		// 不会改变已存在 view 的 session，导致 cookies 仍然共享 → 登录态串号
+		if (this.browserTabs.length > 0) {
+			console.log('[BrowserManager] 销毁', this.browserTabs.length, '个旧标签页，用新 session 重建');
+
+			// 记录旧标签页的 URL 以便恢复
+			const oldUrls = this.browserTabs.map(t => {
+				try { return t.view.webContents.getURL(); } catch { return null; }
+			});
+
+			// 销毁所有旧 view
+			const win = this._getWin();
+			for (const t of this.browserTabs) {
+				try { win && win.contentView.removeChildView(t.view); } catch {}
+				try { t.view.webContents.close(); } catch {}
+			}
+			this.browserTabs = [];
+			this.activeTabId = null;
+			this.browserView = null;
+
+			// 用新 session 重建第一个标签页（恢复之前的活动 URL 或主页）
+			const firstUrl = oldUrls.find(u => u && /^https?:/i.test(u)) || this.HOME_URL;
+			this.createBrowserView(firstUrl);
+			this.applyBrowserBounds();
+			this.pushTabs();
+		}
 
 		return newSession;
 	}
