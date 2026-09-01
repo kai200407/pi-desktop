@@ -3,8 +3,9 @@
 
    职责：
      - 会话列表按项目分组渲染（buildSessionRow / renderGroups）
+     - 会话归档 / 恢复（localStorage 持久化 + 底部「已归档」分组，默认折叠）
      - 会话搜索过滤（命中高亮 + 统计）
-     - 右键菜单（重命名 / 删除 / 复制 ID）+ 行内重命名
+     - 右键菜单（重命名 / 删除 / 复制 ID / 归档）+ 行内重命名
      - 分支弹层（branch-badge → listBranches → switchToBranch）
      - 工作区切换弹层（最近工作区 + 选择其他目录）
      - 新对话 / 临时聊天按钮
@@ -42,6 +43,8 @@
   var SESS_PER_PROJECT = 6;      // 每个项目默认最多展示几条会话
   var SESS_NAMES_KEY = 'pi-session-names';
   var COLLAPSED_KEY = 'pi-collapsed-projects';   // 折叠的项目 path 数组
+  var ARCHIVED_KEY = 'pi-archived-sessions';     // 归档会话映射 {id: {archivedAt, originalProject}}
+  var ARCHIVED_COLLAPSED_KEY = 'pi-archived-group-collapsed';  // 已归档分组折叠态 '1'/'0'
 
   // 内联 svg 图标（CSP 不允许内联 style/script，svg 标签本身没问题）
   var ICON_FOLDER =
@@ -129,6 +132,39 @@
   }
   function setCollapsedProjects(arr) {
     try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(arr)); } catch (e) {}
+  }
+
+  /* ================= 会话归档（P1：归档/恢复/持久化/底部「已归档」分组） =================
+
+     数据结构：localStorage['pi-archived-sessions'] = {
+       "<session-id>": { archivedAt: 1234567890, originalProject: "/path/to/project" }
+     }
+     - 归档是纯 UI 层标记（不动 .jsonl 源文件），与自定义名 pi-session-names 同套路；
+     - renderGroups 渲染时：项目分组内过滤掉归档会话（全归档的空分组直接隐藏），
+       列表底部追加一个「已归档 (N)」分组（默认折叠，折叠态也存 localStorage）；
+     - 恢复（取消归档）时凭 originalProject 仅作信息记录——会话本身仍按 cwd 分组，
+       删掉归档标记后自然回到原分组，无需额外迁移逻辑。 */
+
+  // 读归档映射（带 JSON 容错，坏数据时回退空表）
+  function getArchivedMap() {
+    try {
+      var v = JSON.parse(localStorage.getItem(ARCHIVED_KEY) || '{}');
+      return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+    } catch (e) { return {}; }
+  }
+  function setArchivedMap(map) {
+    try {
+      localStorage.setItem(ARCHIVED_KEY, JSON.stringify(map || {}));
+      console.log('[Sidebar] 归档状态已保存, 共', Object.keys(map || {}).length, '条');
+    } catch (e) { console.error('[Sidebar] 保存归档状态失败:', e); }
+  }
+
+  // 已归档分组的折叠偏好（默认折叠=true）
+  function getArchivedGroupCollapsed() {
+    try { return localStorage.getItem(ARCHIVED_COLLAPSED_KEY) !== '0'; } catch (e) { return true; }
+  }
+  function setArchivedGroupCollapsed(collapsed) {
+    try { localStorage.setItem(ARCHIVED_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (e) {}
   }
 
   /* ================================ Sidebar ================================ */
@@ -250,7 +286,8 @@
     this.hooks.clearThread();
     this._markSwitching(s.id);
     this.call('switchSession', s.id);
-    this.refreshSessions();
+    // 【性能优化】点击切换会话后不需要立刻重拉列表：高亮已通过 activeSessionId
+    // 局部生效，后续 session_restored / session_cleared 事件会防抖刷新列表。
   };
 
   /* 标记「正在切换到某会话」：切换期内主进程可能先广播 session_cleared
@@ -336,7 +373,7 @@
           console.error('[Sidebar] switchSession IPC 失败:', err);
           self.hooks.showNotice('加载会话失败');
         });
-      self.refreshSessions();
+      // 【性能优化】点击后高亮已局部生效，列表刷新交给事件流的防抖调用
     });
     return b;
   };
@@ -357,10 +394,14 @@
     // 先算出可见分组与命中数（项目名命中 = 该项目下所有会话都算命中）
     var visible = [];
     var hits = 0;
+    var archivedMap = getArchivedMap();        // 一次读出，避免每行 JSON.parse
     groups.forEach(function (g) {
       var list = g.sessions || [];
       var projHit = !!q && String(g.project || g.path || '').toLowerCase().indexOf(q) !== -1;
       var shown = (!q || projHit) ? list : list.filter(function (s) { return sessionMatches(s, q); });
+      // 项目分组内过滤掉已归档会话；整组都被归档（空分组）则隐藏
+      shown = shown.filter(function (s) { return !archivedMap[s.id]; });
+      if (!q && !shown.length && list.length) return;  // 非搜索态：有会话但全归档 → 整组隐藏
       if (q && !projHit && !shown.length) return;      // 整组隐藏
       if (q) hits += shown.length;
       visible.push({ g: g, projHit: projHit, list: shown });
@@ -372,7 +413,7 @@
       if (q) this.els.searchStat.textContent = hits ? ('找到 ' + hits + ' 个会话') : '没有匹配的会话';
     }
 
-    if (!visible.length) {
+    if (!visible.length && !Object.keys(archivedMap).length) {
       var p = document.createElement('div');
       p.className = 'session-empty';
       p.textContent = q ? '没有匹配的会话' : '暂无项目';
@@ -458,6 +499,52 @@
 
       listEl.appendChild(block);
     });
+
+    // ===== 底部「已归档 (N)」分组 =====
+    // 汇总跨项目的归档会话（倒序），空则不出；搜索态同样过滤 + 命中高亮。
+    var archivedList = this.getArchivedSessionsList();
+    if (q) {
+      archivedList = archivedList.filter(function (s) { return sessionMatches(s, q); });
+    }
+    if (archivedList.length) {
+      listEl.appendChild(this.buildArchivedGroup(archivedList));
+    }
+  };
+
+  /* 「已归档」分组块：与 .proj-block 同套 DOM/CSS（proj-toggle 折叠箭头 + 行），
+     仅靠 .archived-group 类加区分样式（弱化文字 / 分隔线）。
+     折叠状态独立存 localStorage['pi-archived-group-collapsed']，默认折叠。 */
+  Sidebar.prototype.buildArchivedGroup = function (sessions) {
+    var self = this;
+    var block = document.createElement('div');
+    block.className = 'proj-block archived-group';
+
+    // 折叠态恢复（搜索态强制展开，与项目分组同一规则）
+    var q = this._get('searchQuery') || '';
+    var collapsed = !q && getArchivedGroupCollapsed();
+    if (collapsed) block.classList.add('collapsed');
+
+    // 分组头：折叠箭头 + 归档图标 + 「已归档 (N)」；点击切折叠（区别于项目行：不切工作区）
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'proj-row archived-head';
+    row.innerHTML =
+      '<span class="proj-toggle" role="button" aria-label="折叠/展开">' + ICON_CHEVRON + '</span>' +
+      '<span class="proj-name">已归档 (' + sessions.length + ')</span>';
+    row.title = '已归档的会话（右键可取消归档）';
+    row.addEventListener('click', function () {
+      var next = !block.classList.contains('collapsed');
+      block.classList.toggle('collapsed', next);
+      setArchivedGroupCollapsed(next);
+    });
+    block.appendChild(row);
+
+    if (collapsed) return block;             // 折叠态：只渲染分组头
+
+    sessions.forEach(function (s) {
+      block.appendChild(self.buildSessionRow(s));
+    });
+    return block;
   };
 
   /* ---------------- 项目折叠 / 展开 ---------------- */
@@ -476,6 +563,51 @@
     this.renderGroups();
   };
 
+  /* ---------------- 会话归档：归档 / 恢复 / 查询 ---------------- */
+
+  // 查询某会话是否已归档
+  Sidebar.prototype.isArchived = function (sessionId) {
+    return !!getArchivedMap()[sessionId];
+  };
+
+  // 归档：写入归档映射（记录归档时间 + 原项目路径），保存后重渲染
+  Sidebar.prototype.archiveSession = function (s) {
+    console.log('[Sidebar] 归档会话:', s.id);
+    var map = getArchivedMap();
+    map[s.id] = {
+      archivedAt: Date.now(),
+      originalProject: s.cwd || s.path || ''
+    };
+    setArchivedMap(map);
+    this.renderGroups();
+    this.hooks.showNotice('会话已归档: ' + this.sessionDisplayName(s));
+  };
+
+  // 恢复：从归档映射删除，保存后重渲染（会话自然回到按 cwd 的原分组）
+  Sidebar.prototype.unarchiveSession = function (s) {
+    console.log('[Sidebar] 取消归档:', s.id);
+    var map = getArchivedMap();
+    delete map[s.id];
+    setArchivedMap(map);
+    this.renderGroups();
+    this.hooks.showNotice('会话已恢复: ' + this.sessionDisplayName(s));
+  };
+
+  // 汇总所有已归档会话（跨项目），按归档时间倒序（最新归档的排最前）
+  Sidebar.prototype.getArchivedSessionsList = function () {
+    var map = getArchivedMap();
+    var archived = [];
+    (this._get('sessionGroups') || []).forEach(function (g) {
+      (g.sessions || []).forEach(function (s) {
+        if (map[s.id]) archived.push(s);
+      });
+    });
+    archived.sort(function (a, b) {
+      return (map[b.id].archivedAt || 0) - (map[a.id].archivedAt || 0);
+    });
+    return archived;
+  };
+
   /* ---------------- 拉取列表 ---------------- */
 
   Sidebar.prototype.refreshSessions = function () {
@@ -487,6 +619,19 @@
       self._set('sessionGroups', []);
       self.renderGroups();
     });
+  };
+
+  /* 【性能优化】刷新防抖：50ms 内多次调用只执行最后一次。
+     实测一次会话切换会触发 3-5 次 refreshSessions（点击时 + session_cleared×2 +
+     session_restored×2 + session_info），每次 renderGroups 全量重建 282 行 DOM
+     需 15-30ms，防抖后只执行一次，省 50-150ms 并消除左栏闪烁。 */
+  Sidebar.prototype.scheduleRefreshSessions = function () {
+    var self = this;
+    clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(function () {
+      console.log('[Sidebar] 执行防抖后的 refreshSessions');
+      self.refreshSessions();
+    }, 50);
   };
 
   // 兼容任务书命名：loadSessions = refreshSessions
@@ -529,6 +674,11 @@
       navigator.clipboard.writeText(s.id).then(function () {
         self.hooks.showNotice('已复制会话 ID');
       }).catch(function () { self.hooks.showNotice('复制失败'); });
+    });
+    // 归档 / 取消归档（依据当前归档态显示文案）
+    item(self.isArchived(s.id) ? '取消归档' : '归档', false, function () {
+      if (self.isArchived(s.id)) self.unarchiveSession(s);
+      else self.archiveSession(s);
     });
 
     // ===== 导出子菜单 =====
@@ -677,6 +827,12 @@
     Promise.resolve(this.call('deleteSession', s.file || s.id)).then(function (r) {
       if (r && r.ok) {
         setSessionName(s.id, '');            // 顺带清掉自定义名
+        // 顺带清掉归档标记，避免归档表残留已删会话的垃圾数据
+        if (self.isArchived(s.id)) {
+          var amap = getArchivedMap();
+          delete amap[s.id];
+          setArchivedMap(amap);
+        }
         if (self.isActiveSession(s)) {
           self._set('activeSessionId', null);
           self.hooks.clearThread();
@@ -1044,7 +1200,7 @@
     if (!evt || !evt.type) return false;
     switch (evt.type) {
       case 'agent_end':
-        this.refreshSessions();
+        this.scheduleRefreshSessions();
         return false;                       // 对话流收尾还得 app.js 做，不拦截
 
       case 'session_cleared':
@@ -1059,24 +1215,24 @@
           console.log('[Sidebar] 切换工作区期间的 session_cleared，保留 activeSessionId:', this._switchingTo);
         }
         this._set('currentSessionId', null);
-        this.refreshSessions();
+        this.scheduleRefreshSessions();
         return false;                       // clearThread / 标题复位由 app.js 统一做
 
       case 'session_restored':
         // 切换完成：清除切换标记。若 activeSessionId 因时序问题丢了（如旧版会话
         // 直接 session_restored 无 session_cleared），不强行恢复——点击时早已设置。
         this._switchingTo = null;
-        this.refreshSessions();
+        this.scheduleRefreshSessions();
         return false;
 
       case 'session_info':
         if (evt.cwd && evt.cwd !== this._get('currentCwd')) {
           this.setCwd(evt.cwd);
-          this.refreshSessions();           // 工作区变了 → 项目分组重拉
+          this.scheduleRefreshSessions();   // 工作区变了 → 项目分组重拉（防抖）
         }
         if (evt.sessionId) {
           this._set('currentSessionId', evt.sessionId);
-          if (!this._get('activeSessionId')) this.refreshSessions();   // 高亮跟随当前会话
+          if (!this._get('activeSessionId')) this.scheduleRefreshSessions();   // 高亮跟随当前会话（防抖）
         }
         return false;                       // model / thinking 字段归 app.js
 

@@ -60,16 +60,18 @@
 		loadWidths();
 		restoreCollapsedStates();
 
+		// 2.5 折叠按钮提前绑定：不依赖任何模块，避免后续 init 抛错后按钮失效
+		bindCollapseButtons();
+
 		// 3. 初始化三大模块（注意顺序：browser-ui 最后，因为它需要上报 bounds）
-		initSidebar();
-		initConversation();
-		initBrowserUI();
+		try { initSidebar(); } catch (e) { console.error('[main] initSidebar 失败:', e); }
+		try { initConversation(); } catch (e) { console.error('[main] initConversation 失败:', e); }
+		try { initBrowserUI(); } catch (e) { console.error('[main] initBrowserUI 失败:', e); }
 
 		// 4. 绑定顶层事件
 		bindGlobalEvents();
 		bindMenuEvents();
 		bindResizers();
-		bindCollapseButtons();
 
 		// 5. 应用主题到 document
 		applyTheme();
@@ -363,17 +365,50 @@
 	}
 
 	// --- 折叠按钮 -----------------------------------------------------------
+	// 【关键防御】此函数必须在 try-catch 环境下能被独立调用。
+	// 历史上 init() 中它排在 initSidebar/initConversation/initBrowserUI 之后，
+	// 任一模块抛错都会让按钮永远绑定不上（表现为「按钮点了没反应」）。
+	// 现在 init() 中把它提前到模块初始化【之前】，且使用 clone-and-replace
+	// 清除可能存在的旧监听器，避免重复绑定或旧闭包干扰。
 	function bindCollapseButtons() {
+		console.log('[main] bindCollapseButtons 开始绑定');
+		
 		// 左栏折叠按钮（#shell 左上角，红绿灯右侧）
 		// 注意：此按钮恒挂 #shell 左上角，位置永不随栏开关变化
 		if (btnShowSidebar) {
-			btnShowSidebar.addEventListener('click', () => {
-				console.log('[main] btn-show-sidebar clicked');
-				toggleSidebar();
-			});
-			console.log('[main] btn-show-sidebar 已绑定');
+			try {
+				console.log('[main] btn-show-sidebar 找到，开始绑定');
+				console.log('[main] btn-show-sidebar 计算样式:', {
+					display: getComputedStyle(btnShowSidebar).display,
+					visibility: getComputedStyle(btnShowSidebar).visibility,
+					zIndex: getComputedStyle(btnShowSidebar).zIndex,
+					pointerEvents: getComputedStyle(btnShowSidebar).pointerEvents,
+					appRegion: getComputedStyle(btnShowSidebar).webkitAppRegion || getComputedStyle(btnShowSidebar).appRegion,
+					position: getComputedStyle(btnShowSidebar).position
+				});
+				
+				// clone-and-replace：清除所有旧监听器（防御历史遗留/重复初始化）
+				const parent = btnShowSidebar.parentNode;
+				const freshBtn = btnShowSidebar.cloneNode(true);
+				parent.replaceChild(freshBtn, btnShowSidebar);
+				
+				freshBtn.addEventListener('click', function(e) {
+					e.preventDefault();
+					e.stopPropagation();
+					console.log('[main] btn-show-sidebar clicked');
+					toggleSidebar();
+				});
+				// 额外调试：mousedown 能在 click 之前触发，验证鼠标事件能到达按钮
+				// 若 mousedown 也不触发，说明被 CSS / app-region 吞掉
+				freshBtn.addEventListener('mousedown', function() {
+					console.log('[main] btn-show-sidebar mousedown （事件到达按钮）');
+				});
+				console.log('[main] btn-show-sidebar 已绑定');
+			} catch (err) {
+				console.error('[main] btn-show-sidebar 绑定异常:', err);
+			}
 		} else {
-			console.warn('[main] btn-show-sidebar 未找到！');
+			console.error('[main] btn-show-sidebar 未找到！');
 		}
 
 		// 【重要】右栏开关 #btn-show-browser 不在此绑定：
@@ -390,11 +425,12 @@
 	// 切换左栏显隐：只负责状态翻转，具体设置交给 setSidebarHidden
 	function toggleSidebar() {
 		if (!sidebar) {
-			console.warn('[main] toggleSidebar: #sidebar 不存在，无法折叠');
+			console.error('[main] toggleSidebar: #sidebar 不存在，无法折叠');
 			return;
 		}
-		const hidden = !sidebar.classList.contains('collapsed');
-		console.log('[main] toggleSidebar:', hidden);
+		const isCollapsed = sidebar.classList.contains('collapsed');
+		const hidden = !isCollapsed;
+		console.log('[main] toggleSidebar: 当前 collapsed =', isCollapsed, '→ 设置 hidden =', hidden);
 		setSidebarHidden(hidden);
 	}
 
@@ -403,30 +439,38 @@
 	// 必须「轨道变量归零 + visibility 隐藏」双管齐下，见 styles.css #shell 注释。
 	function setSidebarHidden(hidden) {
 		if (!sidebar) {
-			console.warn('[main] setSidebarHidden: #sidebar 不存在');
+			console.error('[main] setSidebarHidden: #sidebar 不存在');
 			return;
 		}
 		console.log('[main] setSidebarHidden:', hidden);
 
 		// 1. 切换折叠 class（控制 visibility 和 pointer-events）
 		sidebar.classList.toggle('collapsed', hidden);
+		console.log('[main] setSidebarHidden: sidebar.collapsed =', sidebar.classList.contains('collapsed'));
 
 		// 2. 设置轨道宽度变量（grid-template-columns 使用，0px 表示折叠；
 		//    展开时置空 = 移除该属性，让 var(--sidebar-track, --sidebar-width) 走回退值）
 		if (hidden) {
 			document.documentElement.style.setProperty('--sidebar-track', '0px');
+			console.log('[main] setSidebarHidden: --sidebar-track = 0px');
 		} else {
 			document.documentElement.style.removeProperty('--sidebar-track');
+			console.log('[main] setSidebarHidden: --sidebar-track 已移除');
 		}
 
 		// 3. 同步 shell class（用于兄弟选择器隐藏拖拽手柄）
-		if (shell) shell.classList.toggle('sidebar-hidden', hidden);
+		if (shell) {
+			shell.classList.toggle('sidebar-hidden', hidden);
+			console.log('[main] setSidebarHidden: shell.sidebar-hidden =', shell.classList.contains('sidebar-hidden'));
+		}
 
 		// 4. 持久化到 localStorage（state.js setter 会自动处理）
 		state.sidebarHidden = hidden;
+		console.log('[main] setSidebarHidden: state.sidebarHidden =', state.sidebarHidden);
 
 		// 5. 上报 bounds（中栏宽度变了，浏览器 slot 位置也要变）
 		reportBoundsNow();
+		console.log('[main] setSidebarHidden: 完成');
 	}
 
 	// --- 拖拽调宽 -----------------------------------------------------------

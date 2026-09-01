@@ -389,6 +389,9 @@
   <div id="thinking-pop" class="popover thinking-pop hidden"></div>
   <div id="cwd-pop" class="popover cwd-pop hidden"></div>
 
+  <!-- 斜杠命令补全弹层：输入 / 时弹出，位置由 Conversation._positionAbove 计算 -->
+  <div id="command-selector" class="popover command-selector hidden"></div>
+
   <!-- 「从 Chrome 导入登录态」居中模态框。注意：右栏原生 WebContentsView 永远盖
        在 DOM 之上，所以模态框打开前 app.js 会先 browserToggle(false) 把 view 缩
        到 0，关闭时再恢复（见 app.js「导入登录态」一节）。 -->
