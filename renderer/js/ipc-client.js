@@ -559,12 +559,17 @@
    */
   IpcClient.prototype.bindEvents = function (callbacks) {
     var self = this;
-    this._eventCallbacks = callbacks || {};
 
     // 如果已经绑定过，先解绑
+    // 【实测坑】必须先 unbindEvents 再赋值 _eventCallbacks：旧版顺序相反，
+    // unbindEvents 内部 _eventCallbacks = {} 会把刚赋的 callbacks 一并抹掉，
+    // 导致二次 bindEvents（如 main.js 的 onAny 在 breadcrumb 的 on() 之后注册）
+    // 静默丢失全部回调——session_restored 到达渲染层却无人分发，对话区空白。
     if (this._bound) {
       this.unbindEvents();
     }
+
+    this._eventCallbacks = callbacks || {};
 
     if (typeof api.onEvent !== 'function') {
       console.warn('[IpcClient] onEvent API not available');

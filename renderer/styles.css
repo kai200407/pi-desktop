@@ -907,8 +907,12 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   overflow-x: hidden;
 }
 
-/* 空状态：消息流不占位，输入卡片块靠 flex 居中到中栏正中间（仿 Codex） */
-#center.thread-empty { justify-content: center; }
+/* 空状态：消息流不占位，输入卡片块垂直居中（仿 Codex），
+   但面包屑必须固定顶部 —— Codex 中空状态面包屑也在顶部。
+   实现：#center 保持顶部对齐，用 margin:auto 只把 composer-wrap 推到垂直正中。 */
+#center.thread-empty { justify-content: flex-start; }
+#center.thread-empty .conversation-breadcrumb { margin-top: 0; }
+#center.thread-empty .composer-wrap { margin-top: auto; margin-bottom: auto; }
 #center.thread-empty .thread { display: none; }
 
 /* 内容居中，最大 40rem —— Codex 的关键视觉特征 */

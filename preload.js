@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("piAPI", {
 	newSession: () => ipcRenderer.invoke("pi:newSession"),
 	newEphemeral: () => ipcRenderer.invoke("pi:newEphemeral"),
 	switchSession: (id) => ipcRenderer.invoke("pi:switchSession", id),
+	preloadSession: (id) => ipcRenderer.invoke("pi:preloadSession", id),
 	deleteSession: (file) => ipcRenderer.invoke("pi:deleteSession", file),
 	listBranches: (file) => ipcRenderer.invoke("pi:listBranches", file),
 	switchToBranch: (payload) => ipcRenderer.invoke("pi:switchToBranch", payload),
