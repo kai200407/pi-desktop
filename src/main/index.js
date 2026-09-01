@@ -192,6 +192,16 @@ function initModules() {
 	app.on("web-contents-created", (_, wc) => {
 		attachStealth(wc);
 	});
+
+	// 6. 创建首个浏览器标签（加载主页）。
+	// 【背景】旧 main.js 在 createWindow() 里调 createBrowserView()；重构后丢了这个调用，
+	// 导致 browserMgr.browserView 永远为 null —— 渲染层地址栏/标签栏全空，
+	// 「打开浏览器面板」后没有任何 view 可贴。必须在窗口创建后调用一次。
+	browserMgr.createBrowserView();
+	browserMgr.hookDownloads();
+
+	// 7. 预加载会话列表（不等待，后台异步执行）
+	sessionMgr.preloadSessions();
 }
 
 // --- 辅助函数（从 main.js 迁移） -------------------------------------------

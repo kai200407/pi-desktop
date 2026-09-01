@@ -32,8 +32,6 @@
     btnBrowser: $('btn-browser'),
     btnShowSidebar: $('btn-show-sidebar'),
     shell: $('shell'),
-    btnNavBack: $('btn-nav-back'),
-    btnNavForward: $('btn-nav-forward'),
     btnBrand: $('btn-brand'),
     btnSearch: $('btn-search'),
     btnNotify: $('btn-notify'),
@@ -555,8 +553,6 @@
   // （#btn-search 已实装为会话搜索；#btn-open-external / #btn-download / #btn-more
   //  已实装，均不在此列）
   [
-    ['btnNavBack', 'nav:back'],
-    ['btnNavForward', 'nav:forward'],
     ['btnBrand', 'brand'],
     ['btnNotify', 'notify'],
     ['navScheduled', 'scheduled'],

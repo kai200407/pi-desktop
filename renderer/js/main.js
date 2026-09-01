@@ -32,7 +32,6 @@
 	const resizeRight = $('resize-right');
 	const btnShowSidebar = $('btn-show-sidebar');
 	const btnShowBrowser = $('btn-show-browser');
-	const browserSlot = $('browser-slot');
 
 	// --- 模块实例 -----------------------------------------------------------
 	let sidebarModule = null;
@@ -52,6 +51,8 @@
 
 	// --- 初始化 -------------------------------------------------------------
 	function init() {
+		console.time('[main] 总初始化时间');
+		
 		// 1. 先初始化主题（原 app.js 在主题事件绑定前就调用）
 		initTheme();
 
@@ -70,11 +71,11 @@
 		bindResizers();
 		bindCollapseButtons();
 
-		// 5. 初始化 bounds 上报
-		initBoundsReporting();
-
-		// 6. 应用主题到 document
+		// 5. 应用主题到 document
 		applyTheme();
+
+		console.timeEnd('[main] 总初始化时间');
+		console.log('[main] init() 完成（数据异步加载中）');
 	}
 
 	// --- 主题 ---------------------------------------------------------------
@@ -91,7 +92,7 @@
 
 	state.on('theme-changed', (newTheme) => {
 		applyTheme();
-		ipc.call('pi:setTheme', { theme: newTheme });
+		// 主题仅存渲染层 localStorage（state.js setter 已处理），主进程无感知需求
 	});
 
 	// --- 布局恢复 -----------------------------------------------------------
@@ -136,6 +137,7 @@
 	}
 
 	// --- 模块初始化 ---------------------------------------------------------
+	// 【日志约定】各阶段打印 [main] 前缀日志，出问题先看控制台调用链。
 	function initSidebar() {
 		sidebarModule = new window.Sidebar({
 			state: state,
@@ -175,15 +177,30 @@
 		conversationModule.init();
 	}
 
+	// 初始化右栏浏览器模块。
+	// 注意顺序：【先注入 hooks 再 init()】—— init() 末尾的 restoreVisibility()
+	// 会同步右栏显隐并触发 onVisibilityChange 回调，晚注入会丢第一帧通知。
 	function initBrowserUI() {
+		console.log('[main] initBrowserUI()');
+		if (!browserPane) {
+			console.error('[main] #browser-pane 不存在，浏览器模块无法初始化');
+			return;
+		}
+		if (typeof window.BrowserUI !== 'function') {
+			console.error('[main] window.BrowserUI 未加载（js/browser-ui.js 缺失或报错）');
+			return;
+		}
 		browserUIModule = new window.BrowserUI(browserPane, state, ipc);
-		browserUIModule.init();
 		browserUIModule.hooks = {
 			closePopovers: closeAllPopovers,
 			onVisibilityChange: (visible) => {
-				// 浏览器显隐时无需额外处理，state 已同步
+				console.log('[main] 浏览器面板显隐变更:', visible);
 			}
 		};
+		browserUIModule.init();
+		// 暴露调试句柄：DevTools Console 里可手动 window.__browserUI.toggleBrowser()
+		window.__browserUI = browserUIModule;
+		console.log('[main] BrowserUI 初始化完成');
 	}
 
 	// --- 全局事件 -----------------------------------------------------------
@@ -263,28 +280,15 @@
 			});
 		}
 
-		// 右栏折叠按钮（#shell 右上角）
-		if (btnShowBrowser) {
-			btnShowBrowser.addEventListener('click', () => {
-				browserUIModule?.toggleBrowser();
-			});
+		// 【重要】右栏开关 #btn-show-browser 不在此绑定：
+		// BrowserUI.init() 已经绑过一次，重复绑定会让一次点击触发两次 toggle
+		// 互相抵消，表现为「按钮点了没反应」（历史踩过）。这里只做存在性检查。
+		if (!btnShowBrowser) {
+			console.warn('[main] #btn-show-browser 不存在，右栏将无法通过按钮开关');
 		}
 
-		// 左栏底部浏览器开关按钮
-		const btnBrowser = $('btn-browser');
-		if (btnBrowser) {
-			btnBrowser.addEventListener('click', () => {
-				browserUIModule?.toggleBrowser();
-			});
-		}
-
-		// 中栏上下文行浏览器开关
-		const btnBrowserInline = $('btn-toggle-browser-inline');
-		if (btnBrowserInline) {
-			btnBrowserInline.addEventListener('click', () => {
-				browserUIModule?.toggleBrowser();
-			});
-		}
+		// 注意：#btn-browser（左栏底部）和 #btn-toggle-browser-inline（中栏上下文行）
+		// 已在 index.html 中隐藏，不再绑定事件，避免多个入口造成状态不同步
 	}
 
 	function toggleSidebar() {
@@ -383,46 +387,11 @@
 	}
 
 	// --- Bounds 上报 ----------------------------------------------------------
-	let boundsPending = false;
-	let lastBounds = '';
-
-	function sendBounds() {
-		if (browserPane.classList.contains('collapsed')) return;
-		const r = browserSlot.getBoundingClientRect();
-		const b = {
-			x: Math.round(r.left),
-			y: Math.round(r.top),
-			width: Math.round(r.width),
-			height: Math.round(r.height)
-		};
-		const key = b.x + ',' + b.y + ',' + b.width + ',' + b.height;
-		if (key === lastBounds) return;
-		lastBounds = key;
-		ipc.call('browserBounds', b);
-	}
-
-	function reportBounds() {
-		if (boundsPending) return;
-		boundsPending = true;
-		requestAnimationFrame(() => {
-			boundsPending = false;
-			sendBounds();
-		});
-	}
-
+	// 【唯一上报点】浏览器区域尺寸上报统一由 BrowserUI 模块负责（rAF 节流 +
+	// 同步版双路径，详见 browser-ui.js）。这里只保留一个转发器，供左栏折叠 /
+	// 栏宽拖拽等 main.js 侧的布局变化调用 —— 中栏宽度变了，slot 位置也会变。
 	function reportBoundsNow() {
-		boundsPending = false;
-		sendBounds();
-	}
-
-	function initBoundsReporting() {
-		window.addEventListener('resize', reportBounds);
-		if (window.ResizeObserver) {
-			new ResizeObserver(reportBounds).observe(browserSlot);
-		}
-		window.addEventListener('load', reportBounds);
-		// 初始上报一次
-		reportBoundsNow();
+		browserUIModule?.reportBoundsNow();
 	}
 
 	// --- 弹层协调 -----------------------------------------------------------

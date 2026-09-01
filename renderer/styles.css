@@ -553,7 +553,7 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   padding: 0 calc(var(--spacing) * 2) calc(var(--spacing) * 2);
 }
 
-/* 项目行：文件夹图标 + 项目名，当前项目整行高亮 */
+/* 项目行：折叠箭头 + 文件夹图标 + 项目名，当前项目整行高亮 */
 .proj-row {
   display: flex;
   align-items: center;
@@ -579,6 +579,29 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 .proj-row:hover { background: var(--bg-hover); color: var(--text); }
 .proj-row.current { background: var(--bg-active); color: var(--text); font-weight: 500; }
 .proj-row.current svg { color: var(--text-secondary); }
+
+/* 折叠箭头：默认朝向 ▸，展开旋转 90° 成 ▾；点击只折叠/展开，不切换工作区 */
+.proj-row .proj-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: calc(var(--spacing) * -1);   /* 抵消部分 gap，让箭头贴近行左缘 */
+  margin-right: calc(var(--spacing) * -1);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.proj-row .proj-toggle:hover { background: var(--bg-active); color: var(--text); }
+.proj-row .proj-toggle svg {
+  width: 12px;
+  height: 12px;
+  transition: transform .15s ease;
+  transform: rotate(90deg);                  /* 默认展开态 ▾ */
+}
+.proj-block.collapsed .proj-row .proj-toggle svg { transform: rotate(0deg); }  /* 折叠态 ▸ */
 
 /* 项目下的会话：缩进、单行截断 */
 .proj-block { margin-bottom: calc(var(--spacing) * 2); }

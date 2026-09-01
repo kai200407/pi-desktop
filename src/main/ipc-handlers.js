@@ -62,6 +62,8 @@ function registerIpcHandlers(deps) {
 	// 这些是可变量，每次都要取最新值，不能解构固定
 	const pi = () => piEngine.getPi();
 	const browserView = () => browserMgr.getView();
+	// deps.win 可能是函数（惰性取当前窗口，防窗口重建后持有失效引用），统一解析
+	const getWin = () => (typeof win === "function" ? win() : win);
 
 	// ===== pi 操作 =====
 	// ==== 对话 ====
@@ -164,7 +166,7 @@ function registerIpcHandlers(deps) {
 	});
 
 	ipcMain.handle("pi:pickCwd", async () => {
-		const r = await dialog.showOpenDialog(win, {
+		const r = await dialog.showOpenDialog(getWin(), {
 			properties: ["openDirectory", "createDirectory"],
 			defaultPath: pi()?.cwd || os.homedir(),
 			title: "选择工作区",
@@ -550,6 +552,7 @@ function registerIpcHandlers(deps) {
 			const img = await wc.capturePage();
 			shot = { empty: img.isEmpty(), size: img.getSize() };
 		} catch (e) { shot = { err: e.message }; }
+		const w = getWin();
 		return {
 			bounds: view.getBounds(),
 			url: wc.getURL(),
@@ -559,7 +562,7 @@ function registerIpcHandlers(deps) {
 			browserVisible: browserMgr.isVisible(),
 			lastBounds: browserMgr.getLastBounds(),
 			shot,
-			childCount: win ? win.contentView.children.length : -1,
+			childCount: w ? w.contentView.children.length : -1,
 		};
 	});
 

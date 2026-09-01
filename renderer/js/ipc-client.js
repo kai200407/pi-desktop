@@ -660,6 +660,29 @@
      ======================================================================= */
 
   /**
+   * 通用调用入口：按名字分发到本类的命名方法。
+   *
+   * 【背景】browser-ui.js 等模块以字符串形式调用：ipc.call('browserToggle', true)。
+   * 历史上 IpcClient 只有命名方法（browserToggle()）没有 call()，导致跨模块
+   * 全部 IPC 调用抛 'this.ipc.call is not a function' —— 右栏显隐/bounds 永远
+   * 到不了主进程，表现为「按钮点了 view 不显示」。本方法是兼容层，必须保留。
+   *
+   * @param {string} name - 方法名（必须是本类原型上存在的方法，如 'browserGo'）
+   * @param {...*} args - 透传参数
+   * @returns {Promise<*>}
+   */
+  IpcClient.prototype.call = function (name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    var fn = (typeof name === 'string') ? this[name] : null;
+    if (typeof fn === 'function') {
+      try { return Promise.resolve(fn.apply(this, args)); }
+      catch (err) { console.error('[IpcClient] call 调用失败:', name, err); return Promise.resolve(null); }
+    }
+    console.warn('[IpcClient] call: 未知方法', name);
+    return Promise.resolve(null);
+  };
+
+  /**
    * 检查 API 是否可用（主进程是否已注入桥对象）
    * @returns {boolean}
    */

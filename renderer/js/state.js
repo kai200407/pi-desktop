@@ -192,6 +192,18 @@
     event: 'browser-pane-visible-changed'
   });
 
+  /* 【兼容别名】browser-ui.js 模块历史上用 paneVisible 这个短名读写右栏显隐。
+     共享单例（本文件）的正式名是 browserPaneVisible —— 两个名字必须指向同一个
+     底层字段 _browserPaneVisible，否则 BrowserUI 读写 paneVisible 会落到
+     undefined 上（toggle 永远算出同一个值，按钮表现为「点了没反应」）。
+     这里用 defineProperty 做纯转发，不走 defineProp（避免重复持久化/发事件）。 */
+  Object.defineProperty(AppState.prototype, 'paneVisible', {
+    enumerable: true,
+    configurable: false,
+    get: function () { return this._browserPaneVisible; },
+    set: function (v) { this.browserPaneVisible = !!v; }   // 走正式 setter → 持久化 + 派发
+  });
+
   /* =======================================================================
      对话 / 模型（不落盘，由 session_info 事件驱动）
      ======================================================================= */
@@ -259,6 +271,15 @@
   defineProp(AppState.prototype, 'browserTabs', '_browserTabs', {
     event: 'browser-tabs-changed',
     alwaysEmit: true
+  });
+
+  /* 【兼容别名】browser-ui.js 用 tabsState 这个名字保存 {activeId, tabs}。
+     与 browserTabs 指向同一份数据，转发到正式 setter 以派发事件。 */
+  Object.defineProperty(AppState.prototype, 'tabsState', {
+    enumerable: true,
+    configurable: false,
+    get: function () { return this._browserTabs; },
+    set: function (v) { this.browserTabs = v; }
   });
   defineProp(AppState.prototype, 'pageBlank', '_pageBlank', {
     event: 'page-blank-changed'

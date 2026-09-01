@@ -183,6 +183,31 @@ class BrowserManager {
 	createBrowserView(initialUrl) {
 		const win = this._getWin();
 		if (!win) return;
+		// 【防挂空】窗口 webContents 尚未完成首载时 addChildView 不可靠：
+		// view 能拿到正确 bounds 但 capturePage() 返回空图，表现为右栏全黑
+		//（历史实测踩过）。等 dom-ready 再建，已就绪就直接建。
+		// 【防挂空/防死锁】只在「窗口刚创建、首载尚未完成」这一次延迟建 view：
+		//   - did-finish-load 触发 → 立即建（最干净的时序）
+		//   - 800ms 保险丝 → 强制建（防 did-finish-load 丢失；过短会在 renderer
+		//     未稳时挂空 —— 实测 300ms 偶发 capturePage 空图，800ms 稳定）
+		// 判断依据用 didFinishLoad 一次性标志，而不是 isLoading() —— 后者在
+		// dom-ready 之后页面继续拉资源时仍为 true，会反复推迟造成「永远建不上」。
+		const wc0 = win.webContents;
+		if (wc0 && !wc0.isDestroyed() && !this._winFirstLoadDone) {
+			let retried = false;
+			const retry = (why) => {
+				if (retried) return;
+				retried = true;
+				this._winFirstLoadDone = true;   // 只走一次，后续建标签不再延迟
+				if (process.env.PI_DESKTOP_DEBUG_BOUNDS) console.log("[tab] 触发建 view:", why);
+				this.createBrowserView(initialUrl);
+			};
+			if (process.env.PI_DESKTOP_DEBUG_BOUNDS) console.log("[tab] 等待窗口首载完成再建 view");
+			wc0.once("did-finish-load", () => retry("did-finish-load"));
+			setTimeout(() => retry("fallback-800ms"), 800);
+			return;
+		}
+		if (process.env.PI_DESKTOP_DEBUG_BOUNDS) console.log("[tab] createBrowserView 继续，win ready");
 		const ses = session.fromPartition("persist:pi-browser");
 
 		// (1) UA：去掉 Electron / 应用名，并把 Chrome 版本规整成 x.0.0.0（真 Chrome 的形态）
@@ -230,14 +255,32 @@ class BrowserManager {
 		// 实测过一个坑：若 addChildView 未生效，children.length 仍为 1，
 		// view 有正确 bounds 但 capturePage() 返回空图，表现为右栏全黑。
 		const view = this.browserView;   // 本函数内统一用 view 指代新建的这个
-		win.contentView.addChildView(view);
-		if (!win.contentView.children.includes(view)) {
-			// 兼容写法：部分版本需要在窗口就绪后再挂
-			win.once("ready-to-show", () => {
-				try { win.contentView.addChildView(view); } catch {}
-				this.applyBrowserBounds();
-			});
-		}
+		const attachNow = () => {
+			const w = this._getWin();
+			if (!w || w.isDestroyed()) return false;
+			try { w.contentView.addChildView(view); } catch {}
+			return w.contentView.children.includes(view);
+		};
+		// 【挂载确认】用 view 自己的 dom-ready + 截屏轮询双保险：
+		// children.includes(view) 为 true 不代表截屏管线 ready（实测 includes 通过
+		// 但 capturePage 仍空图的情况存在，尤其启动竞态）。页面就绪后做一次截屏
+		// 自检，空图就重挂一次，彻底杜绝「右栏全黑但所有状态看着都对」。
+		view.webContents.once("dom-ready", () => {
+			attachNow();
+			this.applyBrowserBounds();
+			setTimeout(async () => {
+				try {
+					const img = await view.webContents.capturePage();
+					if (img.isEmpty() && this.browserVisible) {
+						if (process.env.PI_DESKTOP_DEBUG_BOUNDS) console.log("[tab] 截屏空图，重挂 view 自检修复");
+						attachNow();
+						this.applyBrowserBounds();
+					}
+				} catch {}
+			}, 400);
+		});
+		// 立即挂一次（多数情况已能挂上；挂不上由 dom-ready 兜底）
+		attachNow();
 		view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
 
 		// 登记为一个标签并设为活动

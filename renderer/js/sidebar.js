@@ -41,11 +41,16 @@
 
   var SESS_PER_PROJECT = 6;      // 每个项目默认最多展示几条会话
   var SESS_NAMES_KEY = 'pi-session-names';
+  var COLLAPSED_KEY = 'pi-collapsed-projects';   // 折叠的项目 path 数组
 
   // 内联 svg 图标（CSP 不允许内联 style/script，svg 标签本身没问题）
   var ICON_FOLDER =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
     '<path d="M1.8 4.2h4l1.4 1.6h7v6.4a1.2 1.2 0 0 1-1.2 1.2H3a1.2 1.2 0 0 1-1.2-1.2z"/></svg>';
+  // 折叠箭头（类文件树的 ▸/▾，靠 CSS transform 旋转，不换图标）
+  var ICON_CHEVRON =
+    '<svg viewBox="0 0 16 16" aria-hidden="true">' +
+    '<polyline points="6,4 11,8 6,12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   /* ---------------- 内置小工具（hooks 未提供时的兜底实现） ---------------- */
 
@@ -111,6 +116,19 @@
   function baseName(p) {
     var parts = String(p || '').replace(/\/+$/, '').split('/');
     return parts[parts.length - 1] || p || '';
+  }
+
+  /* 项目折叠状态：localStorage['pi-collapsed-projects'] = [path, ...]。
+     纯 UI 偏好，不走 AppState（AppState 那套是给会触发重渲染/事件派发的状态用的，
+     折叠只影响 renderGroups，自己读自己写就够）。 */
+  function getCollapsedProjects() {
+    try {
+      var v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]');
+      return Array.isArray(v) ? v : [];
+    } catch (e) { return []; }
+  }
+  function setCollapsedProjects(arr) {
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(arr)); } catch (e) {}
   }
 
   /* ================================ Sidebar ================================ */
@@ -330,20 +348,37 @@
 
     var expandedProjects = this._get('expandedProjects') || {};
 
+    // 折叠状态一次读出（避免 forEach 里每行都 JSON.parse）
+    var collapsedArr = getCollapsedProjects();
+
     visible.forEach(function (item) {
       var g = item.g;
       var block = document.createElement('div');
       block.className = 'proj-block';
 
-      // 项目行：点击切换工作区
+      // 搜索态强制展开（不改动 localStorage 里的偏好），否则读用户折叠偏好
+      var collapsed = !q && collapsedArr.indexOf(g.path) >= 0;
+      if (collapsed) block.classList.add('collapsed');
+
+      // 项目行：左侧折叠箭头（点击折叠/展开）+ 文件夹图标 + 项目名（点击切换工作区）
       var row = document.createElement('button');
       row.type = 'button';
       row.className = 'proj-row' + (g.current ? ' current' : '');
-      row.innerHTML = ICON_FOLDER + '<span class="proj-name"></span>';
+      row.innerHTML =
+        '<span class="proj-toggle" role="button" aria-label="折叠/展开">' + ICON_CHEVRON + '</span>' +
+        ICON_FOLDER + '<span class="proj-name"></span>';
       var pn = row.querySelector('.proj-name');
       if (item.projHit) pn.innerHTML = highlight(g.project || g.path, q);   // 已转义
       else pn.textContent = g.project || g.path;
       row.title = g.path || '';
+
+      // 折叠箭头：stopPropagation 防止触发「切换工作区」
+      var toggle = row.querySelector('.proj-toggle');
+      toggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        self.toggleProjectCollapse(g.path);
+      });
+
       row.addEventListener('click', function () {
         if (self._get('running') || g.current) return;
         Promise.resolve(self.call('setCwd', g.path)).then(function () {
@@ -351,6 +386,12 @@
         }).catch(function () {});
       });
       block.appendChild(row);
+
+      // 折叠态：只渲染项目行，跳过会话列表
+      if (collapsed) {
+        listEl.appendChild(block);
+        return;
+      }
 
       var list = item.list;
       if (!list.length) {
@@ -383,6 +424,22 @@
 
       listEl.appendChild(block);
     });
+  };
+
+  /* ---------------- 项目折叠 / 展开 ---------------- */
+
+  Sidebar.prototype.isProjectCollapsed = function (path) {
+    return getCollapsedProjects().indexOf(path) >= 0;
+  };
+
+  // 切换折叠：改 localStorage 后重渲染（数据已在 sessionGroups 缓存，不走 IPC）
+  Sidebar.prototype.toggleProjectCollapse = function (path) {
+    var arr = getCollapsedProjects();
+    var i = arr.indexOf(path);
+    if (i >= 0) arr.splice(i, 1);
+    else arr.push(path);
+    setCollapsedProjects(arr);
+    this.renderGroups();
   };
 
   /* ---------------- 拉取列表 ---------------- */
@@ -784,9 +841,69 @@
       }
     });
 
-    // 首刷
-    this.initCwd();
-    this.refreshSessions();
+    // 首刷：异步加载，不阻塞界面渲染
+    // 1. 先显示加载状态（立即渲染）
+    this.showLoadingState();
+    
+    // 2. 异步获取工作区（不阻塞）
+    this.initCwdAsync();
+    
+    // 3. 异步刷新会话列表（不阻塞）
+    this.refreshSessionsAsync();
+  };
+
+  /* ---------------- 加载状态显示 ---------------- */
+  // 显示会话列表加载中的占位提示
+  Sidebar.prototype.showLoadingState = function () {
+    var listEl = this.els.sessionList;
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="loading-placeholder" style="padding:20px;text-align:center;color:var(--fg-muted,#888);">加载会话列表中...</div>';
+  };
+
+  // 显示错误提示
+  Sidebar.prototype.showError = function (msg) {
+    var listEl = this.els.sessionList;
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="error-placeholder" style="padding:20px;text-align:center;color:var(--fg-error,#e74c3c);">' + (msg || '加载失败') + '</div>';
+  };
+
+  /* ---------------- 异步加载方法 ---------------- */
+  // 异步刷新会话列表（不阻塞 init）
+  Sidebar.prototype.refreshSessionsAsync = function () {
+    var self = this;
+    console.time('[Sidebar] 会话列表加载');
+    
+    Promise.resolve(this.call('listSessionsGrouped'))
+      .then(function (groups) {
+        console.timeEnd('[Sidebar] 会话列表加载');
+        console.log('[Sidebar] 会话列表加载完成，共', groups ? groups.length : 0, '个项目');
+        self._set('sessionGroups', groups || []);
+        self.renderGroups();
+      })
+      .catch(function (err) {
+        console.timeEnd('[Sidebar] 会话列表加载');
+        console.error('[Sidebar] 会话列表加载失败:', err);
+        self._set('sessionGroups', []);
+        self.showError('会话列表加载失败');
+      });
+  };
+
+  // 异步获取工作区（不阻塞 init）
+  Sidebar.prototype.initCwdAsync = function () {
+    var self = this;
+    console.time('[Sidebar] 工作区获取');
+    
+    Promise.resolve(this.call('getCwd'))
+      .then(function (result) {
+        console.timeEnd('[Sidebar] 工作区获取');
+        if (result && result.cwd) {
+          self.setCwd(result.cwd);
+        }
+      })
+      .catch(function (err) {
+        console.timeEnd('[Sidebar] 工作区获取');
+        console.error('[Sidebar] 获取工作区失败:', err);
+      });
   };
 
   /* ---------------- 主进程事件流（session_info / session_cleared / agent_end 等） ----------------

@@ -184,6 +184,10 @@ class SessionManager {
 	constructor(piEngine) {
 		if (!piEngine) throw new Error("SessionManager 需要 piEngine 适配对象");
 		this.engine = piEngine;
+		// 会话列表缓存（避免重复扫描文件系统）
+		this._sessionListCache = null;
+		this._cacheTime = 0;
+		this.CACHE_TTL = 5000;  // 5秒缓存有效期
 	}
 
 	// --- 便捷访问注入的能力 -------------------------------------------------
@@ -209,6 +213,21 @@ class SessionManager {
 
 	// --- 会话列表 ----------------------------------------------------------
 
+	// 预加载会话列表到缓存（启动时调用，不等待）
+	preloadSessions() {
+		console.log('[SessionManager] 预加载会话列表...');
+		console.time('[SessionManager] 预加载耗时');
+		this.listSessionsGrouped()
+			.then(() => {
+				console.timeEnd('[SessionManager] 预加载耗时');
+				console.log('[SessionManager] 预加载完成');
+			})
+			.catch(err => {
+				console.timeEnd('[SessionManager] 预加载耗时');
+				console.error('[SessionManager] 预加载失败:', err);
+			});
+	}
+
 	// 按项目（工作区目录）分组的会话列表 —— 左栅用。
 	//
 	// pi 的会话不在 <cwd>/.pi/sessions，而是统一放在
@@ -218,6 +237,14 @@ class SessionManager {
 	// 直接扫这个目录就能自动发现历史上所有项目，
 	// 不靠 recentCwds 慢慢累积。
 	async listSessionsGrouped() {
+		// 检查缓存是否有效
+		const now = Date.now();
+		if (this._sessionListCache && (now - this._cacheTime) < this.CACHE_TTL) {
+			console.log('[SessionManager] 返回缓存的会话列表（缓存时间:', now - this._cacheTime, 'ms）');
+			return this._sessionListCache;
+		}
+
+		console.time('[SessionManager] 扫描会话列表');
 		try {
 			const cur = this.pi?.cwd || this.loadConf().cwd || process.cwd();
 			const root = path.join(getPiAgentDir(), "sessions");
@@ -269,8 +296,19 @@ class SessionManager {
 				if (a.current !== b.current) return a.current ? -1 : 1;
 				return (b.sessions[0]?.mtime || 0) - (a.sessions[0]?.mtime || 0);
 			});
-			return groups.slice(0, 20);
-		} catch {
+			
+			const result = groups.slice(0, 20);
+			
+			// 更新缓存
+			this._sessionListCache = result;
+			this._cacheTime = Date.now();
+			console.timeEnd('[SessionManager] 扫描会话列表');
+			console.log('[SessionManager] 会话列表已缓存，共', result.length, '个项目');
+			
+			return result;
+		} catch (err) {
+			console.timeEnd('[SessionManager] 扫描会话列表');
+			console.error('[SessionManager] 扫描会话列表失败:', err);
 			return [];
 		}
 	}

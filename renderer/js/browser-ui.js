@@ -1,53 +1,59 @@
 /* =========================================================================
-   browser-ui.js — 右栏内置浏览器 UI 模块
+   browser-ui.js —— 右栏内置浏览器 UI 模块
 
-   从 renderer/app.js 提取的右栏全部逻辑：
+   职责（从 renderer/app.js 提取的右栏全部逻辑）：
+     - 右栏显隐（#btn-show-browser 唯一入口；DOM 折叠 + 通知主进程缩/贴 view）
+     - #browser-slot bounds 上报（ResizeObserver + rAF 节流 + 同步版双路径）
      - 标签栏渲染与切换（真多标签，主进程每标签一个 WebContentsView）
      - 地址栏 omnibox（URL/搜索分流，对齐 Chrome 语义）
      - 收藏按钮 + 收藏弹层（localStorage 简易收藏夹）
      - 新标签页空状态网格（收藏 ≥1 时置换默认站点）
      - 下载按钮 + 下载列表弹层
-     - #browser-slot bounds 上报（ResizeObserver + rAF 节流 + 同步版）
+     - 「从 Chrome 导入登录态」模态框（打开期间把原生 view 缩 0，避免盖住模态框）
 
    依赖：
-     - window.piAPI  —— preload 注入的 IPC 桥（本模块用 IpcClient 薄封装）
-     - AppState      —— 可选的共享状态对象（承载跨模块标志位）；不传则内部自管
+     - window.piAPI       —— preload 注入的 IPC 桥（本模块用 IpcClient 薄封装）
+     - window.IpcClient   —— ipc-client.js 提供；缺失时用本文件内的最小兜底
+     - state              —— 共享 AppState 单例（state.js）或本文件内的轻量 AppState
      - window.AppUtils.escapeHtml —— 可选；缺失时用本地实现兜底
 
-   用法：
-     var ipc = new IpcClient(window.piAPI);
-     var browserUI = new BrowserUI(document.getElementById('browser-pane'), appState, ipc);
-     browserUI.init();
-
-   注意：本模块【不】改动 app.js；app.js 侧的同名逻辑后续可替换为对本模块的委托。
+   【关键约定】state 字段名：
+     本模块读写 state.paneVisible / state.tabsState 等短名；共享 AppState 单例
+     （state.js）通过 defineProperty 别名把它们映射到正式字段 browserPaneVisible /
+     browserTabs —— 两侧命名必须保持映射，否则会出现「读写 undefined，按钮点了
+     没反应」的静默失效（历史踩过，勿删 state.js 里的别名胜）。
    ========================================================================= */
 (function () {
   'use strict';
 
-  /* ---------------------------------------------------------------------
-     IpcClient：对 window.piAPI 的薄封装。
-     主进程未注入时（如浏览器里直接打开）返回 resolved(null)，保证 UI 不崩。
-     --------------------------------------------------------------------- */
-  function IpcClient(api) {
-    this.api = api || {};
-  }
-  IpcClient.prototype.call = function (name) {
-    var args = Array.prototype.slice.call(arguments, 1);
-    if (typeof this.api[name] === 'function') return this.api[name].apply(this.api, args);
-    return Promise.resolve(null);
-  };
-  window.IpcClient = window.IpcClient || IpcClient;
+  var TAG = '[BrowserUI]';   // 日志统一前缀
 
   /* ---------------------------------------------------------------------
-     AppState：跨模块共享状态（轻量容器）。
-     右栏相关字段：
-       paneVisible     用户手动开/关右栏（持久化 localStorage）
-       pageBlank       当前 URL 是否空页（由 browser_url 事件推导）
-       blankOverride   手动「新建标签页」置的空页标记
-       importModalOpen Cookie 导入模态框打开期间隐藏原生 view
-       tabsState       {activeId, tabs} 主进程 browser_tabs 事件推送的全量标签
+     IpcClient 兜底：正常由 ipc-client.js 提供功能完整的版本；
+     本文件只在它缺失时（如纯浏览器里打开调试）挂一个最小实现，
+     所有调用返回 resolved(null)，保证 UI 不崩。
      --------------------------------------------------------------------- */
-  function AppState() {
+  if (!window.IpcClient) {
+    function IpcClientFallback(api) {
+      this.api = api || window.piAPI || {};
+    }
+    IpcClientFallback.prototype.call = function (name) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      if (typeof this.api[name] === 'function') {
+        try { return Promise.resolve(this.api[name].apply(this.api, args)); }
+        catch (e) { console.warn(TAG, 'IPC 调用失败:', name, e); return Promise.resolve(null); }
+      }
+      console.warn(TAG, 'IPC 方法不存在:', name);
+      return Promise.resolve(null);
+    };
+    window.IpcClient = IpcClientFallback;
+  }
+
+  /* ---------------------------------------------------------------------
+     轻量 AppState 兜底：调用方未传共享 state 时内部自管一份，
+     字段与 state.js 的别名层保持同名（paneVisible / tabsState …）。
+     --------------------------------------------------------------------- */
+  function LocalBrowserState() {
     this.paneVisible = false;
     // 主进程创建 view 时就直接 loadURL(HOME_URL)，首个 browser_url 事件可能比
     // 渲染层注册监听更早（丢包）。初值取【乐观】：先当作已有页面，
@@ -57,10 +63,9 @@
     this.importModalOpen = false;
     this.tabsState = { activeId: null, tabs: [] };
   }
-  window.AppState = window.AppState || AppState;
 
   /* ---------------------------------------------------------------------
-     本地兜底 escapeHtml（app.js 有同名实现；模块化后从 AppUtils 取，没有就自建）
+     本地兜底 escapeHtml（AppUtils 缺失时用）
      --------------------------------------------------------------------- */
   function escapeHtml(s) {
     if (window.AppUtils && typeof window.AppUtils.escapeHtml === 'function') {
@@ -72,16 +77,23 @@
   }
   void escapeHtml; // 预留给弹层内需要转义的扩展点
 
+  /* ---------------------------------------------------------------------
+     小工具：安全绑定点击事件（元素缺失时告警而不是抛异常中断 init）
+     --------------------------------------------------------------------- */
+  function onClick(el, name, fn) {
+    if (!el) { console.warn(TAG, '元素缺失，跳过绑定:', name); return; }
+    el.addEventListener('click', fn);
+  }
+
   /* =====================================================================
-     BrowserUI
-     @param container 右栏根元素（#browser-pane）
-     @param state     AppState 实例（可选；缺省内部 new 一个）
-     @param ipc       IpcClient 实例（可选；缺省用 window.piAPI 包一个）
+     常量
      ===================================================================== */
-  var BROWSER_KEY = 'pi-browser-visible';
-  var FAV_KEY = 'pi-browser-favorites';
-  var TAB_TITLE_MAX = 14;
+  var BROWSER_KEY = 'pi-browser-visible';   // 右栏显隐的 localStorage 键（与 app.js 一致）
+  var FAV_KEY = 'pi-browser-favorites';     // 收藏夹 localStorage 键
+  var FAV_MAX = 50;                         // 收藏上限，防无限膨胀
+  var TAB_TITLE_MAX = 14;                   // 标签标题截断长度
   var TAB_BLANK = '新标签页';
+  var FAV_POLL_MS = 800;                    // 地址栏轮询间隔（刷新收藏态）
 
   var BE_DEFAULT_SITES = [
     { url: 'https://www.google.com', name: 'Google' },
@@ -92,13 +104,19 @@
     { url: 'https://gemini.google.com', name: 'Gemini' }
   ];
 
+  /* =====================================================================
+     BrowserUI 构造
+     @param container 右栏根元素（#browser-pane）
+     @param state     共享 AppState 单例（可选；缺省内部 new LocalBrowserState）
+     @param ipc       IpcClient 实例（可选；缺省用 window.piAPI 包一个）
+     ===================================================================== */
   function BrowserUI(container, state, ipc) {
     this.el = container;
-    this.state = state || new AppState();
-    this.ipc = ipc || new IpcClient(window.piAPI);
+    this.state = state || new LocalBrowserState();
+    this.ipc = ipc || new window.IpcClient();
 
     var $ = function (id) { return document.getElementById(id); };
-    // 右栏内部元素（容器内查找优先，拿不到退回全局 id —— 兼容现有 index.html）
+    // 右栏内部元素 + 跨栏协作元素（统一在这里取一次，缺失的在 setup 时告警）
     this.ui = {
       browserPane: container,
       browserSlot: $('browser-slot'),
@@ -121,6 +139,12 @@
       downloadPop: $('download-pop'),
       morePop: $('more-pop'),
       beGrid: $('be-grid'),
+      // Cookie 导入模态框
+      btnImport: $('btn-import'),
+      importOverlay: $('import-overlay'),
+      importCancel: $('import-cancel'),
+      importConfirm: $('import-confirm'),
+      importResult: $('import-result'),
       // 跨栏协作元素
       shell: $('shell'),
       btnBrowser: $('btn-browser'),
@@ -128,24 +152,29 @@
     };
 
     // bounds 上报去重状态
-    this._boundsPending = false;
-    this._lastBounds = '';
-    this._lastViewVisible = null;
+    this._boundsPending = false;   // 是否已有 rAF 在排队
+    this._lastBounds = '';         // 上次上报的 rect 指纹（不变就不打扰主进程）
+    this._lastViewVisible = null;  // 上次下发给主进程的 view 可见性（去抖）
 
-    // 外部协作钩子（由 app.js 侧注入；缺省空实现保证模块独立可用）
-    // closePopovers: 关闭其它弹层（模型/思考/工作区/会话右键……）
-    // onVisibilityChange: 右栏显隐变化回调（用于栏宽拖拽后补报等）
+    // 外部协作钩子（由 main.js 注入；缺省空实现保证模块独立可用）
+    //   closePopovers:      关闭其它模块弹层（模型/思考/工作区/会话右键……）
+    //   onVisibilityChange: 右栏显隐变化回调
     this.hooks = { closePopovers: null, onVisibilityChange: null };
 
-    this._favPollTimer = null;
+    this._favPollTimer = null;     // 地址栏轮询定时器
+    this._resizeObserver = null;   // slot 尺寸观察器
+    this._importing = false;       // Cookie 导入进行中（防重复点击）
   }
 
   /* =====================================================================
      bounds 上报：量 #browser-slot 的 rect → 去重 → 下发主进程
      原生 WebContentsView 不受 CSS 影响，必须把矩形同步过去
      ===================================================================== */
+
+  // 真正量尺寸并下发（内部）：不在面板展开时不上报；尺寸没变不上报
   BrowserUI.prototype.sendBounds = function () {
-    if (this.ui.browserPane.classList.contains('collapsed')) return;
+    if (!this.ui.browserSlot) return;
+    if (this.ui.browserPane && this.ui.browserPane.classList.contains('collapsed')) return;
     var r = this.ui.browserSlot.getBoundingClientRect();
     var b = {
       x: Math.round(r.left),
@@ -154,7 +183,7 @@
       height: Math.round(r.height)
     };
     var key = b.x + ',' + b.y + ',' + b.width + ',' + b.height;
-    if (key === this._lastBounds) return;      // 位置没变就不打扰主进程
+    if (key === this._lastBounds) return;
     this._lastBounds = key;
     this.ipc.call('browserBounds', b);
   };
@@ -170,13 +199,13 @@
     });
   };
 
-  /* 【重要】拖拽栏宽时必须走这个同步版，不能靠 rAF：
+  /* 【重要】拖拽栏宽 / 显隐切换必须走这个同步版，不能靠 rAF：
      窗口被遮挡 / 不在前台时 document.visibilityState 为 'hidden'，
      Chromium 会把 requestAnimationFrame 完全饿死（已实测：回调数秒不触发），
      那时 reportBounds() 会静默失效，原生 view 就停在旧位置错位。
      pointermove 本身已经是输入频率（≤120Hz），setBounds 很便宜，直接同步发。 */
   BrowserUI.prototype.reportBoundsNow = function () {
-    this._boundsPending = false;               // 废掉可能残留的 rAF 标志
+    this._boundsPending = false;   // 废掉可能残留的 rAF 标志，避免重复发
     this.sendBounds();
   };
 
@@ -189,32 +218,34 @@
      右栏显隐 + 空状态
 
      原生 WebContentsView 永远盖在渲染层 DOM 之上，所以 #browser-empty（普通 DOM）
-     只有在主进程把 view 缩到 0 时才看得见。两个【互相独立】的标志位：
-       paneVisible   —— 用户手动开/关右栏（持久化 localStorage）
-       pageBlank     —— 当前页面是 about:blank / 空（由 browser_url 事件推导）
-       blankOverride —— 手动空页标记
+     只有在主进程把 view 缩到 0 时才看得见。三个【互相独立】的标志位：
+       paneVisible     —— 用户手动开/关右栏（持久化 localStorage）
+       pageBlank       —— 当前页面是 about:blank / 空（由 browser_url 事件推导）
+       blankOverride   —— 手动「新建标签页」置的空页标记
+       importModalOpen —— Cookie 导入模态框打开期间隐藏原生 view
      真正下发的可见性 = paneVisible && !isBlank() && !importModalOpen。
      ===================================================================== */
   BrowserUI.prototype.isBlank = function () {
-    return this.state.blankOverride || this.state.pageBlank;
+    return !!(this.state.blankOverride || this.state.pageBlank);
   };
 
+  // 统一同步点：空状态 DOM、原生 view 可见性、bounds 上报，全在这里收口
   BrowserUI.prototype.syncBrowserView = function () {
     var st = this.state;
-    // 导入模态框打开期间不让原生 view 遮住模态框（原生 view 永远在 DOM 之上）
-    var modalHold = st.importModalOpen;
+    var modalHold = !!st.importModalOpen;
     // 原生 view / 空状态互斥占同一块矩形：空状态可见时必须把 view 缩到 0x0
-    var showEmpty = st.paneVisible && this.isBlank();
-    this.ui.browserEmpty.classList.toggle('hidden', !showEmpty);
+    var showEmpty = !!st.paneVisible && this.isBlank();
+    if (this.ui.browserEmpty) this.ui.browserEmpty.classList.toggle('hidden', !showEmpty);
 
-    var viewVisible = st.paneVisible && !this.isBlank() && !modalHold;
+    var viewVisible = !!st.paneVisible && !this.isBlank() && !modalHold;
     if (viewVisible !== this._lastViewVisible) {
       this._lastViewVisible = viewVisible;
+      console.log(TAG, '原生 view 可见性 ->', viewVisible);
       this.ipc.call('browserToggle', viewVisible);
     }
     // 即使 view 当前不可见也要把 rect 报上去，主进程会缓存，
     // 等页面真正加载时直接按最新 rect 贴出来，避免闪一帧错位
-    this._lastBounds = '';                        // 强制下次上报
+    this._lastBounds = '';
     if (st.paneVisible) this.reportBoundsNow();
   };
 
@@ -225,31 +256,52 @@
     this.syncBrowserView();
   };
 
+  /* ----- 显隐主入口（#btn-show-browser / 菜单 toggle-browser 都走这里） ----- */
+
+  // 设置右栏显隐：改 state → 改 DOM → 持久化 → 同步主进程 view → 通知外部
   BrowserUI.prototype.setBrowserVisible = function (visible) {
     var st = this.state;
-    st.paneVisible = !!visible;
-    this.ui.browserPane.classList.toggle('collapsed', !st.paneVisible);
-    // 右栏折叠后在 #shell 打标，让中栏右缘的展开把手现身
-    if (this.ui.shell) this.ui.shell.classList.toggle('browser-hidden', !st.paneVisible);
+    visible = !!visible;
+    console.log(TAG, 'setBrowserVisible:', visible);
+    st.paneVisible = visible;
+
+    if (this.ui.browserPane) this.ui.browserPane.classList.toggle('collapsed', !visible);
+    // 右栏折叠后在 #shell 打标，让中栏右缘的展开把手现身（同左栏 sidebar-hidden 模式）
+    if (this.ui.shell) this.ui.shell.classList.toggle('browser-hidden', !visible);
     // 折叠时把 grid 轨道归零（不用 display:none —— Chromium 的 grid 会把 item
     // 剔除但轨道塌缩错位，右半屏变死区，实测踩过）。展开时移除归零变量。
-    document.documentElement.style.setProperty('--browser-track', st.paneVisible ? '' : '0px');
-    if (this.ui.btnBrowser) this.ui.btnBrowser.classList.toggle('active', st.paneVisible);
-    if (this.ui.btnBrowserInline) this.ui.btnBrowserInline.classList.toggle('active', st.paneVisible);
-    try { localStorage.setItem(BROWSER_KEY, st.paneVisible ? '1' : '0'); } catch (e) {}
+    document.documentElement.style.setProperty('--browser-track', visible ? '' : '0px');
+    // 可选按钮（当前已隐藏）存在时同步 active 态
+    if (this.ui.btnBrowser) this.ui.btnBrowser.classList.toggle('active', visible);
+    if (this.ui.btnBrowserInline) this.ui.btnBrowserInline.classList.toggle('active', visible);
+    try { localStorage.setItem(BROWSER_KEY, visible ? '1' : '0'); } catch (e) {}
+
     this.syncBrowserView();
+    this.updateToggleButton();
     if (typeof this.hooks.onVisibilityChange === 'function') {
-      this.hooks.onVisibilityChange(st.paneVisible);
+      try { this.hooks.onVisibilityChange(visible); } catch (e) { console.error(TAG, e); }
     }
   };
 
   BrowserUI.prototype.toggleBrowser = function () {
+    console.log(TAG, 'toggleBrowser，当前 =', !!this.state.paneVisible);
     this.setBrowserVisible(!this.state.paneVisible);
+  };
+
+  // 更新右上角开关按钮的提示文案（图标本身不变，位置恒定）
+  BrowserUI.prototype.updateToggleButton = function () {
+    var btn = this.ui.btnShowBrowser;
+    if (!btn) return;
+    btn.title = this.state.paneVisible ? '关闭浏览器面板' : '打开浏览器面板';
+    btn.classList.toggle('active', !!this.state.paneVisible);
   };
 
   // 启动时恢复右栏可见性：首次运行（无键）默认展开
   BrowserUI.prototype.restoreVisibility = function () {
-    this.setBrowserVisible(localStorage.getItem(BROWSER_KEY) !== '0');
+    var visible = true;
+    try { visible = localStorage.getItem(BROWSER_KEY) !== '0'; } catch (e) {}
+    console.log(TAG, 'restoreVisibility:', visible);
+    this.setBrowserVisible(visible);
   };
 
   /* =====================================================================
@@ -258,15 +310,15 @@
   BrowserUI.prototype.setupNavButtons = function () {
     var self = this;
     var ipc = this.ipc;
-    this.ui.btnBack.addEventListener('click', function () { self.clearBlank(); ipc.call('browserBack'); });
-    this.ui.btnForward.addEventListener('click', function () { self.clearBlank(); ipc.call('browserForward'); });
-    this.ui.btnReload.addEventListener('click', function () { self.clearBlank(); ipc.call('browserReload'); });
-    this.ui.btnHome.addEventListener('click', function () { self.clearBlank(); ipc.call('browserHome'); });
-    this.ui.btnDevtools.addEventListener('click', function () { ipc.call('browserDevtools'); });
+    onClick(this.ui.btnBack, 'btn-back', function () { self.clearBlank(); ipc.call('browserBack'); });
+    onClick(this.ui.btnForward, 'btn-forward', function () { self.clearBlank(); ipc.call('browserForward'); });
+    onClick(this.ui.btnReload, 'btn-reload', function () { self.clearBlank(); ipc.call('browserReload'); });
+    onClick(this.ui.btnHome, 'btn-home', function () { self.clearBlank(); ipc.call('browserHome'); });
+    onClick(this.ui.btnDevtools, 'btn-devtools', function () { ipc.call('browserDevtools'); });
 
     // 在外部浏览器打开当前地址栏 URL：空/非 http(s) 时不动
-    this.ui.btnOpenExternal.addEventListener('click', function () {
-      var u = self.ui.urlInput.value.trim();
+    onClick(this.ui.btnOpenExternal, 'btn-open-external', function () {
+      var u = (self.ui.urlInput && self.ui.urlInput.value || '').trim();
       if (!/^https?:\/\//i.test(u)) return;
       ipc.call('browserOpenExternal', u);
     });
@@ -274,12 +326,13 @@
 
   BrowserUI.prototype.setupOmnibox = function () {
     var self = this;
+    if (!this.ui.urlInput) { console.warn(TAG, '元素缺失: url-input'); return; }
     this.ui.urlInput.addEventListener('keydown', function (e) {
       if (e.key !== 'Enter') return;
       var url = self.ui.urlInput.value.trim();
       if (!url) return;
       // omnibox 语义（对齐 Chrome 地址栏）：看着像域名/URL 才当网址，否则当搜索词。
-      // 判定：带协议头 / localhost:port / 形如 a.b 的域名（含 Unicode 域名）。
+      // 判定：带协议头 / about: / 形如 a.b 的域名（含 Unicode 域名）且不含空格。
       var looksLikeUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(url)
         || /^about:/i.test(url)
         || (/^[^\s]+\.[^\s]{2,}$/.test(url) && !url.includes(' '));
@@ -296,7 +349,7 @@
   };
 
   /* =====================================================================
-     收藏夹（localStorage 简易实现，上限 50 条）
+     收藏夹（localStorage 简易实现，上限 FAV_MAX 条）
      ===================================================================== */
   BrowserUI.prototype.getFavs = function () {
     try { return JSON.parse(localStorage.getItem(FAV_KEY) || '[]'); } catch (e) { return []; }
@@ -305,6 +358,7 @@
     try { localStorage.setItem(FAV_KEY, JSON.stringify(list)); } catch (e) {}
   };
   BrowserUI.prototype.refreshFavState = function () {
+    if (!this.ui.btnFavorite || !this.ui.urlInput) return;
     var url = this.ui.urlInput.value.trim();
     var fav = this.getFavs().some(function (f) { return f.url === url; });
     this.ui.btnFavorite.classList.toggle('active', fav);
@@ -313,7 +367,8 @@
 
   BrowserUI.prototype.setupFavorite = function () {
     var self = this;
-    this.ui.btnFavorite.addEventListener('click', function () {
+    if (!this.ui.urlInput) return;
+    onClick(this.ui.btnFavorite, 'btn-favorite', function () {
       var url = self.ui.urlInput.value.trim();
       if (!/^https?:\/\//.test(url)) return;        // 没有真页面不收藏
       var list = self.getFavs();
@@ -324,12 +379,14 @@
         // 标题从当前活动标签拿，拿不到就退回 url
         var title = '';
         try {
-          var ts = self.state.tabsState;
-          var active = (ts.tabs || []).find(function (t) { return t.id === ts.activeId; });
+          var ts = self.state.tabsState || { tabs: [] };
+          var tabs = ts.tabs || [];
+          var active = null;
+          for (var k = 0; k < tabs.length; k++) { if (tabs[k].id === ts.activeId) { active = tabs[k]; break; } }
           title = (active && active.title) || url;
         } catch (e) {}
         list.unshift({ url: url, title: title });
-        if (list.length > 50) list.length = 50;      // 上限 50，防无限膨胀
+        if (list.length > FAV_MAX) list.length = FAV_MAX;
       }
       self.saveFavs(list);
       self.refreshFavState();
@@ -338,17 +395,19 @@
     // 地址栏 URL 变化时刷新收藏态（url-input 没有变更事件，轻轮询兜底）
     var lastVal = '';
     this._favPollTimer = setInterval(function () {
+      if (!self.ui.urlInput) return;
       if (self.ui.urlInput.value !== lastVal) {
         lastVal = self.ui.urlInput.value;
         if (document.activeElement !== self.ui.urlInput) self.refreshFavState();
       }
-    }, 800);
+    }, FAV_POLL_MS);
   };
 
   /* ---- 收藏弹层（#btn-more）：列出收藏，点击导航，✕ 移除 ---- */
   BrowserUI.prototype.renderMorePop = function () {
     var self = this;
     var pop = this.ui.morePop;
+    if (!pop) return;
     pop.innerHTML = '';
     var head = document.createElement('div');
     head.className = 'fav-head';
@@ -401,6 +460,7 @@
   };
 
   BrowserUI.prototype.showFavorites = function () {
+    if (!this.ui.morePop || !this.ui.btnMore) return;
     var opening = this.ui.morePop.classList.contains('hidden');
     this._closePopovers();
     if (!opening) return;
@@ -423,6 +483,7 @@
   BrowserUI.prototype.renderDownloadPop = function () {
     var self = this;
     var pop = this.ui.downloadPop;
+    if (!pop) return;
     pop.innerHTML = '';
     var head = document.createElement('div');
     head.className = 'dl-head';
@@ -458,6 +519,7 @@
   };
 
   BrowserUI.prototype.showDownloads = function () {
+    if (!this.ui.downloadPop || !this.ui.btnDownload) return;
     var opening = this.ui.downloadPop.classList.contains('hidden');
     this._closePopovers();
     if (!opening) return;
@@ -477,9 +539,10 @@
 
   BrowserUI.prototype.renderTabs = function (state) {
     var self = this;
+    if (!this.ui.tabStrip) return;
     var st = this.state;
     if (state) st.tabsState = { activeId: state.activeId, tabs: state.tabs || [] };
-    var ts = st.tabsState;
+    var ts = st.tabsState || { activeId: null, tabs: [] };
     var frag = document.createDocumentFragment();
 
     (ts.tabs || []).forEach(function (t) {
@@ -525,7 +588,7 @@
 
   BrowserUI.prototype.setupTabs = function () {
     var self = this;
-    this.ui.btnTabNew.addEventListener('click', function () {
+    onClick(this.ui.btnTabNew, 'btn-tab-new', function () {
       // 真开一个新 view。有了真多标签后，新标签直接加载主页更符合直觉。
       self.state.blankOverride = false;
       self.ipc.call('browserTabNew');
@@ -573,13 +636,84 @@
   };
 
   /* =====================================================================
+     Cookie 导入模态框（#btn-import → #import-overlay）
+
+     原生 WebContentsView 永远盖在 DOM 之上，所以模态框打开前必须先把
+     view 缩到 0（state.importModalOpen = true → syncBrowserView 处理），
+     关闭时再恢复。导入结果展示在 #import-result。
+     ===================================================================== */
+  BrowserUI.prototype.setupImportModal = function () {
+    var self = this;
+    if (!this.ui.importOverlay) return;   // HTML 里没有就整段跳过
+
+    onClick(this.ui.btnImport, 'btn-import', function () { self.openImportModal(); });
+    onClick(this.ui.importCancel, 'import-cancel', function () { self.closeImportModal(); });
+    onClick(this.ui.importConfirm, 'import-confirm', function () { self.runImport(); });
+
+    // 点遮罩空白处关闭（点模态框本身不关）
+    this.ui.importOverlay.addEventListener('click', function (e) {
+      if (e.target === self.ui.importOverlay) self.closeImportModal();
+    });
+  };
+
+  BrowserUI.prototype.openImportModal = function () {
+    if (!this.ui.importOverlay) return;
+    console.log(TAG, '打开 Cookie 导入模态框');
+    this.state.importModalOpen = true;      // 触发 syncBrowserView 把原生 view 缩 0
+    this.syncBrowserView();
+    if (this.ui.importResult) this.ui.importResult.classList.add('hidden');
+    this.ui.importOverlay.classList.remove('hidden');
+  };
+
+  BrowserUI.prototype.closeImportModal = function () {
+    if (!this.ui.importOverlay) return;
+    this.state.importModalOpen = false;
+    this.syncBrowserView();                 // 恢复原生 view 可见性
+    this.ui.importOverlay.classList.add('hidden');
+  };
+
+  // 执行导入：期间禁用按钮防重复点击，结果写进 #import-result
+  BrowserUI.prototype.runImport = function () {
+    var self = this;
+    if (this._importing) return;
+    this._importing = true;
+    var btn = this.ui.importConfirm;
+    if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+
+    Promise.resolve(this.ipc.call('importCookies', {})).then(function (r) {
+      r = r || {};
+      var box = self.ui.importResult;
+        if (box) {
+        box.classList.remove('hidden');
+        if (r.ok) {
+          var line = '导入完成：成功 ' + (r.imported || 0) +
+            '，跳过 ' + (r.skipped || 0) + '，失败 ' + (r.failed || 0) + '。';
+          if (r.needCloseChrome) line += '（Chrome 未完全退出，部分 Cookie 可能未导入）';
+          box.textContent = line;
+        } else {
+          box.textContent = '导入失败：' + (r.message || r.error || '未知错误');
+        }
+      }
+      // 导入成功后刷新空状态网格（收藏/登录态可能变了）
+      self.renderEmptyGrid();
+    }).catch(function (e) {
+      console.error(TAG, 'importCookies 失败:', e);
+      var box = self.ui.importResult;
+      if (box) { box.classList.remove('hidden'); box.textContent = '导入失败：' + (e && e.message || e); }
+    }).then(function () {
+      self._importing = false;
+      if (btn) { btn.disabled = false; btn.textContent = '开始导入'; }
+    });
+  };
+
+  /* =====================================================================
      浮层定位（保留防溢出逻辑：popoverRightEdge）
 
      原生浏览器 view 永远在渲染层 DOM 之上，弹层横向范围必须限制在
      「左栏+中栏」内 —— 浏览器面板可见时以它的左缘为界，否则贴窗口右缘。
      ===================================================================== */
   BrowserUI.prototype.popoverRightEdge = function () {
-    if (!this.ui.browserPane.classList.contains('collapsed')) {
+    if (this.ui.browserPane && !this.ui.browserPane.classList.contains('collapsed')) {
       var left = this.ui.browserPane.getBoundingClientRect().left;
       if (left > 0) return left - 8;
     }
@@ -587,6 +721,7 @@
   };
 
   BrowserUI.prototype.positionPopoverXY = function (pop, x, y) {
+    if (!pop) return;
     pop.classList.remove('hidden');
     var w = pop.offsetWidth;
     var h = pop.offsetHeight;
@@ -599,9 +734,11 @@
 
   // 关闭本模块弹层 + 委托外部 closePopovers（模型/思考/工作区等其它弹层）
   BrowserUI.prototype._closePopovers = function () {
-    this.ui.downloadPop.classList.add('hidden');
-    this.ui.morePop.classList.add('hidden');
-    if (typeof this.hooks.closePopovers === 'function') this.hooks.closePopovers();
+    if (this.ui.downloadPop) this.ui.downloadPop.classList.add('hidden');
+    if (this.ui.morePop) this.ui.morePop.classList.add('hidden');
+    if (typeof this.hooks.closePopovers === 'function') {
+      try { this.hooks.closePopovers(); } catch (e) { console.error(TAG, e); }
+    }
   };
 
   BrowserUI.prototype.closePopups = function () {
@@ -610,7 +747,7 @@
 
   /* =====================================================================
      主进程事件入口：browser_url / browser_tabs
-     由 app.js 的 handleEvent 分发到这里（或直接挂 api.onEvent）
+     由 main.js 的 onAny 分发到这里
      ===================================================================== */
   BrowserUI.prototype.handleEvent = function (evt) {
     if (!evt || !evt.type) return false;
@@ -618,14 +755,16 @@
     switch (evt.type) {
       case 'browser_url':
         // 新建空标签页期间不让底层页面的 URL/标题回写到地址栏与标签上
-        if (!st.blankOverride && document.activeElement !== this.ui.urlInput) {
+        if (this.ui.urlInput && !st.blankOverride && document.activeElement !== this.ui.urlInput) {
           this.ui.urlInput.value = evt.url || '';
         }
-        this.ui.btnBack.disabled = !evt.canBack;
-        this.ui.btnForward.disabled = !evt.canForward;
-        this.ui.urlLock.classList.toggle('hidden', st.blankOverride || !/^https:/i.test(evt.url || ''));
-        this.ui.btnReload.classList.toggle('loading', !!evt.loading);
-        this.ui.btnReload.title = evt.loading ? '加载中…' : '刷新';
+        if (this.ui.btnBack) this.ui.btnBack.disabled = !evt.canBack;
+        if (this.ui.btnForward) this.ui.btnForward.disabled = !evt.canForward;
+        if (this.ui.urlLock) this.ui.urlLock.classList.toggle('hidden', st.blankOverride || !/^https:/i.test(evt.url || ''));
+        if (this.ui.btnReload) {
+          this.ui.btnReload.classList.toggle('loading', !!evt.loading);
+          this.ui.btnReload.title = evt.loading ? '加载中…' : '刷新';
+        }
         var blank = this.isBlankUrl(evt.url);
         // 标签标题不在这里改 —— 由 browser_tabs 事件驱动 renderTabs() 统一重画
         // 空页 → 让原生 view 缩到 0，把位置让给 #browser-empty（普通 DOM）
@@ -643,35 +782,39 @@
   };
 
   /* =====================================================================
-     init：接线全部事件 + 启动 ResizeObserver
+     init：接线全部事件 + 恢复显隐 + 启动 ResizeObserver
      ===================================================================== */
   BrowserUI.prototype.init = function () {
     var self = this;
+    console.log(TAG, 'init()，DOM 检查:', {
+      pane: !!this.ui.browserPane,
+      slot: !!this.ui.browserSlot,
+      btnShowBrowser: !!this.ui.btnShowBrowser
+    });
 
     this.setupNavButtons();
     this.setupOmnibox();
     this.setupFavorite();
     this.setupTabs();
+    this.setupImportModal();
 
     // 下载 / 收藏弹层触发按钮
-    this.ui.btnDownload.addEventListener('click', function () { self.showDownloads(); });
-    this.ui.btnMore.addEventListener('click', function () { self.showFavorites(); });
+    onClick(this.ui.btnDownload, 'btn-download', function () { self.showDownloads(); });
+    onClick(this.ui.btnMore, 'btn-more', function () { self.showFavorites(); });
 
-    // 右栏开关按钮（标题栏 / 中栏上下文行 / #shell 右上角永恒按钮）
-    if (this.ui.btnBrowser) {
-      this.ui.btnBrowser.addEventListener('click', function () { self.toggleBrowser(); });
-    }
-    if (this.ui.btnBrowserInline) {
-      this.ui.btnBrowserInline.addEventListener('click', function () { self.toggleBrowser(); });
-    }
-    if (this.ui.btnShowBrowser) {
-      this.ui.btnShowBrowser.addEventListener('click', function () { self.toggleBrowser(); });
-    }
+    /* 右栏开关按钮 —— #shell 右上角永恒按钮 #btn-show-browser 是【唯一入口】。
+       #btn-browser（左栏底部）与 #btn-toggle-browser-inline（中栏上下文行）
+       已在 index.html 中隐藏，不绑事件，避免多入口状态不同步。
+       注意：main.js 不得再对 #btn-show-browser 重复绑定，否则一次点击
+       触发两次 toggle 互相抵消，表现为「按钮没反应」（历史踩过）。 */
+    onClick(this.ui.btnShowBrowser, 'btn-show-browser', function () {
+      self.toggleBrowser();
+    });
 
     // bounds 上报：窗口 resize + slot 尺寸变化 + 页面 load
     var rafReport = function () { self.reportBounds(); };
     window.addEventListener('resize', rafReport);
-    if (window.ResizeObserver) {
+    if (window.ResizeObserver && this.ui.browserSlot) {
       this._resizeObserver = new ResizeObserver(rafReport);
       this._resizeObserver.observe(this.ui.browserSlot);
     }
@@ -679,6 +822,9 @@
 
     // 新标签页快捷站点网格（含收藏置换）
     this.renderEmptyGrid();
+
+    // 恢复上次的显隐状态（内部会同步 DOM / 主进程 / bounds）
+    this.restoreVisibility();
   };
 
   // 模块卸载（目前单页应用用不到，留作测试钩子）

@@ -23,12 +23,6 @@
       <!-- 第一行：红绿灯留白后的工具行（本行可拖拽窗口） -->
       <div class="sb-tools">
         <div class="traffic-light-space"></div>
-        <button id="btn-nav-back" class="icon-btn sb-ico no-drag" title="后退">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="10,3 5,8 10,13" /></svg>
-        </button>
-        <button id="btn-nav-forward" class="icon-btn sb-ico no-drag" title="前进">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="6,3 11,8 6,13" /></svg>
-        </button>
       </div>
 
       <!-- 第二行：品牌 pi ⌄ + 搜索 / 通知 -->
@@ -140,7 +134,7 @@
             <path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" />
           </svg>
         </button>
-        <button id="btn-browser" class="icon-btn sb-ico" title="切换浏览器面板">
+        <button id="btn-browser" class="icon-btn sb-ico hidden" title="切换浏览器面板">
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
             <line x1="1.5" y1="6" x2="14.5" y2="6" />
@@ -267,7 +261,7 @@
             <span class="ctx-text">插件</span>
           </button>
           <span class="toolbar-spacer"></span>
-          <button id="btn-toggle-browser-inline" class="icon-btn sm" type="button" title="切换浏览器面板">
+          <button id="btn-toggle-browser-inline" class="icon-btn sm hidden" type="button" title="切换浏览器面板">
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
               <line x1="10" y1="2.5" x2="10" y2="13.5" />
