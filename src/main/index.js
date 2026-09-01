@@ -208,23 +208,26 @@ function initModules() {
 function serializeMessages(msgs) {
 	return msgs.map(m => {
 		if (m.role === "user") {
-			return {
-				role: "user",
-				content: typeof m.content === "string" ? m.content
-					: m.content.map(b => b.type === "text" ? b.text : "[非文本]").join("\n"),
-			};
+			// conversation.restoreSession 期望 m.text 字段（不是 m.content）
+			const text = typeof m.content === "string" ? m.content
+				: (m.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+			return { role: "user", text };
 		}
 		if (m.role === "assistant") {
-			return {
-				role: "assistant",
-				content: typeof m.content === "string" ? m.content
-					: m.content.map(b => {
-						if (b.type === "text") return b.text;
-						if (b.type === "tool_use") return `[调用 ${b.name}]`;
-						return "[非文本]";
-					}).join("\n"),
-			};
+			// conversation.buildMessageDiv 期望 m.text + m.tools 字段
+			let text = "";
+			const tools = [];
+			if (typeof m.content === "string") {
+				text = m.content;
+			} else if (Array.isArray(m.content)) {
+				m.content.forEach(b => {
+					if (b.type === "text") text += (text ? "\n" : "") + b.text;
+					else if (b.type === "tool_use") tools.push({ name: b.name, args: b.input });
+				});
+			}
+			return { role: "assistant", text, tools };
 		}
+		// 其他角色（tool 等）原样透传，conversation 不处理
 		return m;
 	});
 }

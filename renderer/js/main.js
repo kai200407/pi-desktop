@@ -285,6 +285,18 @@
 			}
 		});
 
+		// 点击弹层外部时关闭所有弹层（右键菜单/模型弹层/下载弹层等）。
+		// 【重构补漏】此监听在旧 app.js 中存在，模块化拆分时丢失，导致
+		// 「右键菜单点外部不关闭」。用 mousedown 捕获：右键菜单打开时的
+		// 按下本身不触发关闭（closest 命中菜单自身），按下菜外即关。
+		document.addEventListener('mousedown', (e) => {
+			if (e.target.closest && e.target.closest(
+				'#model-pop, #thinking-pop, #model-btn, #thinking-btn, #cwd-pop, #nav-more, #btn-add-project, ' +
+				'#session-ctx-menu, #download-pop, #more-pop, #btn-download, #btn-more, #branch-pop, .branch-badge'
+			)) return;
+			closeAllPopovers();
+		});
+
 		// 全局键盘事件
 		document.addEventListener('keydown', (e) => {
 			// Esc 关闭所有弹层

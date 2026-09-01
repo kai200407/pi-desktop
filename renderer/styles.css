@@ -1807,27 +1807,40 @@ mark.find-cur { background: rgba(250, 204, 21, .8); color: #1a1a1a; }
 
 /* ---------------- 会话右键菜单 ---------------- */
 .session-ctx-menu {
-  width: 160px;
-  padding: calc(var(--spacing) * 1) 0;
+  min-width: 180px;
+  padding: 6px 0;
+  border-radius: 8px;                 /* 圆角加大，对齐 Codex 菜单观感 */
+  background: var(--bg-elevated);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);  /* 阴影加强，浮层感更明显 */
   /* 【实测坑】.popover 默认 overflow:hidden 会把「导出」子菜单（left:100%
      绝对定位在菜单外侧）整个裁掉——这里必须放开溢出，子菜单才看得见。 */
   overflow: visible;
+}
+/* 菜单项公共样式（普通项 + 子菜单项 + 子菜单触发项统一外观）
+   【注意】.ctx-item 在会话行 hover 工具按钮处另有定义（flex 布局），
+   这里追加的上下文菜单属性与之叠加，互不影响。 */
+.ctx-item-btn,
+.session-ctx-menu .ctx-item,
+.ctx-submenu-panel .ctx-item {
+  padding: 8px 16px;                  /* 内边距加大，点击热区更宽松 */
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background .15s;        /* hover 平滑过渡 */
 }
 .ctx-item-btn {
   display: flex;
   align-items: center;
   gap: calc(var(--spacing) * 2);
   width: 100%;
-  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
   border: none;
   background: transparent;
-  color: var(--text-secondary);
   font-family: inherit;
-  font-size: 12.5px;
   text-align: left;
-  cursor: pointer;
 }
-.ctx-item-btn:hover { background: var(--bg-hover); color: var(--text); }
+.ctx-item-btn:hover,
+.session-ctx-menu .ctx-item:hover,
+.ctx-submenu-panel .ctx-item:hover { background: var(--bg-hover); color: var(--text); }
 .ctx-item-btn.danger { color: var(--danger); }
 .ctx-item-btn.danger:hover { background: var(--bg-hover); }
 
@@ -1839,29 +1852,33 @@ mark.find-cur { background: rgba(250, 204, 21, .8); color: #1a1a1a; }
 .ctx-submenu::after {
   content: '▶';
   position: absolute;
-  right: 8px;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);        /* 箭头垂直居中 */
   font-size: 10px;
   color: var(--text-tertiary);
+  pointer-events: none;               /* 不挡 hover，避免闪烁 */
 }
+.ctx-submenu:hover::after { color: var(--text); }
 
 .ctx-submenu-panel {
   position: absolute;
   left: 100%;
-  top: 0;
-  min-width: 150px;
+  top: -6px;                          /* 与父菜单内边距对齐 */
+  min-width: 160px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-  padding: 4px 0;
-  margin-left: 4px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+  padding: 6px 0;
+  margin-left: 8px;                   /* 与父菜单留间距，层级更清楚 */
   z-index: 1001;
 }
 
 .ctx-sep {
   height: 1px;
   background: var(--border);
-  margin: 4px 0;
+  margin: 6px 0;
 }
 
 /* ---------------- 下载弹层 ---------------- */
@@ -2057,11 +2074,12 @@ mark.find-cur { background: rgba(250, 204, 21, .8); color: #1a1a1a; }
   display: inline-flex;
   position: absolute;
   top: 12px;
-  z-index: 30;
+  z-index: 100;                  /* 从 30 提高到 100，确保不被遮挡 */
   width: 30px;
   height: 30px;
   align-items: center;
   justify-content: center;
+  pointer-events: auto !important;  /* 确保可点击，防止父元素 pointer-events:none 影响 */
 }
 .pane-toggle-btn.left  { left: 78px; }    /* 紧贴红绿灯（红绿灯止于 x≈70） */
 .pane-toggle-btn.right { right: 16px; }   /* 贴 shell 右上角内侧 */

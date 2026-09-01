@@ -313,18 +313,29 @@
       console.log('[Sidebar] 会话右键:', s.id, e.clientX, e.clientY);
       self.openSessionCtxMenu(s, e.clientX, e.clientY);
     });
-    // 左键：切换到该会话（运行中或已是活动会话时忽略）
+    // 左键：切换到该会话（运行中忽略；已是活动会话时强制刷新）
     b.addEventListener('click', function () {
       console.log('[Sidebar] 会话点击:', s.id);
-      if (self._get('running') || self.isActiveSession(s)) {
-        console.log('[Sidebar] 忽略点击（运行中或已激活）');
+      if (self._get('running')) {
+        console.log('[Sidebar] 忽略点击（运行中）');
         return;
+      }
+      var isActive = self.isActiveSession(s);
+      if (isActive) {
+        console.log('[Sidebar] 强制重新加载当前会话:', s.id);
       }
       self._set('activeSessionId', s.id);
       self.setTitle(self.sessionDisplayName(s));
       self.hooks.clearThread();
       self._markSwitching(s.id);
-      self.call('switchSession', s.id);
+      self.call('switchSession', s.id)
+        .then(function() {
+          console.log('[Sidebar] switchSession IPC 成功:', s.id);
+        })
+        .catch(function(err) {
+          console.error('[Sidebar] switchSession IPC 失败:', err);
+          self.hooks.showNotice('加载会话失败');
+        });
       self.refreshSessions();
     });
     return b;
@@ -495,6 +506,8 @@
       return;
     }
     console.log('[Sidebar] 打开右键菜单:', s.id, x, y);
+    // 再次右键其他会话时先关掉可能存在的旧菜单（含全局监听残留）
+    this.closePopovers();
     menu.innerHTML = '';
     menu.dataset.sid = s.id;
 
@@ -554,10 +567,27 @@
 
     menu.appendChild(exportSubmenu);
 
-    // hover 显示/隐藏子菜单
-    exportItem.addEventListener('mouseenter', function () {
+    // hover 显示/隐藏子菜单。
+    // 【延迟隐藏】触发项移出后给 100ms 宽限：子菜单与触发项之间有
+    // margin-left:8px 的间距，立即隐藏会让用户来不及移动过去。
+    // 隐藏前检查子菜单自身 :hover，已移入子菜单则不关。
+    var hideTimer = null;
+    function showSub() {
+      clearTimeout(hideTimer);
       exportSubmenu.style.display = 'block';
-    });
+    }
+    function hideSub() {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function () {
+        if (!exportSubmenu.matches(':hover') && !exportItem.matches(':hover')) {
+          exportSubmenu.style.display = 'none';
+        }
+      }, 100);
+    }
+    exportItem.addEventListener('mouseenter', showSub);
+    exportItem.addEventListener('mouseleave', hideSub);
+    exportSubmenu.addEventListener('mouseenter', showSub);
+    exportSubmenu.addEventListener('mouseleave', hideSub);
     menu.addEventListener('mouseleave', function () {
       exportSubmenu.style.display = 'none';
     });
