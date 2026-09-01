@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("piAPI", {
 	send: (text) => ipcRenderer.invoke("pi:send", text),
 	abort: () => ipcRenderer.invoke("pi:abort"),
 	compact: () => ipcRenderer.invoke("pi:compact"),
+	// 会话统计：Token 用量 / 缓存命中率 / 成本 / 上下文占用（中栏底部状态栏用）
+	getSessionStats: () => ipcRenderer.invoke("pi:getSessionStats"),
 
 	// ---- 会话 ----
 	newSession: () => ipcRenderer.invoke("pi:newSession"),
@@ -17,6 +19,7 @@ contextBridge.exposeInMainWorld("piAPI", {
 	switchToBranch: (payload) => ipcRenderer.invoke("pi:switchToBranch", payload),
 	listSessions: () => ipcRenderer.invoke("pi:listSessions"),
 	listSessionsGrouped: () => ipcRenderer.invoke("pi:listSessionsGrouped"),
+	exportSession: (sessionId, format) => ipcRenderer.invoke("pi:exportSession", { sessionId, format }),
 
 	// ---- 模型 / 思考等级 ----
 	getModels: () => ipcRenderer.invoke("pi:getModels"),

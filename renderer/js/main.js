@@ -79,21 +79,85 @@
 	}
 
 	// --- 主题 ---------------------------------------------------------------
+	// 主题三态：'light' | 'dark' | 'system'
+	//   - light / dark：用户显式选中，持久化到 localStorage，重启后保持
+	//   - system：跟随 macOS 的 prefers-color-scheme，动态监听系统主题变化
+	//
+	// 切换流程：
+	//   点击按钮 → 计算下一个主题 → state.theme = next（触发 theme-changed）
+	//     → applyTheme() 写入 <html data-theme> → CSS 变量切换 → 图标切换
+	//
+	// 为什么不需要额外的 _themeRaw 字段：
+	//   state.theme 的 setter 会把值写进 localStorage 并派发事件。
+	//   「system」本身也是合法持久值，applyTheme() 内部判断一下
+	//   是不是 system 再决定要不要走 matchMedia，不需要额外字段。
 	function initTheme() {
 		// 默认暗色（跟 Codex 一致），手动切过就记住用户选择
+		// 注意：这里用 _theme 直写内部字段，避免在 init 阶段就发 theme-changed 事件
+		// （那时监听者还没就位，事件会丢）
 		const theme = localStorage.getItem('pi-theme') || 'dark';
-		state._theme = theme;  // 直接设置内部值，避免触发事件
+		state._theme = theme;
+		console.log('[theme] initTheme: 读取 localStorage →', theme);
 	}
 
+	// 把状态里的 'system' 解析成实际生效的 'light' | 'dark'
+	// 只有 system 模式才走 matchMedia；其余原样返回
+	function resolveTheme(theme) {
+		if (theme !== 'system') return theme;
+		const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+		const resolved = prefersDark ? 'dark' : 'light';
+		console.log('[theme] system 模式 → 解析为', resolved);
+		return resolved;
+	}
+
+	// 把主题写到 <html data-theme>，同时切换按钮上的太阳/月亮图标
+	// 调用时机：init 时一次 + 每次 theme-changed 事件
 	function applyTheme() {
-		const theme = state.theme || 'dark';
-		document.documentElement.setAttribute('data-theme', theme);
+		const raw = state.theme || 'dark';       // 用户选的：light / dark / system
+		const effective = resolveTheme(raw);      // 实际生效的：light / dark
+		console.log('[theme] applyTheme: raw=', raw, 'effective=', effective);
+		document.documentElement.setAttribute('data-theme', effective);
+
+		// 图标切换：CSS 已根据 [data-theme] 控制 .icon-sun/.icon-moon 的显隐，
+		// 这里不需要额外 DOM 操作。但留一个调试钩子，方便 DevTools 验证。
+		const btnTheme = $('btn-theme');
+		if (btnTheme) {
+			btnTheme.setAttribute('data-active-theme', effective);
+			btnTheme.title = raw === 'system'
+				? ('切换主题（当前：跟随系统=' + effective + '）')
+				: ('切换主题（当前：' + (effective === 'dark' ? '暗色' : '亮色') + '）');
+		}
 	}
 
+	// 监听主题变化：state.theme 的 setter 会派发 theme-changed
+	// 这里只负责把新值写到 DOM，持久化已由 state.js 处理
 	state.on('theme-changed', (newTheme) => {
-		applyTheme();
-		// 主题仅存渲染层 localStorage（state.js setter 已处理），主进程无感知需求
+		console.log('[theme] theme-changed 事件 →', newTheme);
+		try {
+			applyTheme();
+		} catch (e) {
+			// 防御性捕获：主题应用失败不应让其他初始化崩溃
+			console.error('[theme] applyTheme 失败:', e);
+		}
 	});
+
+	// 系统主题变化监听：只在 system 模式下才有意义
+	// macOS 用户在系统设置里切外观时，跟着刷新界面
+	if (window.matchMedia) {
+		const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+		// 新版 API：addEventListener('change', ...)；老板本是 addListener
+		const onSystemThemeChange = () => {
+			if (state.theme === 'system') {
+				console.log('[theme] 系统主题变化，重新应用 system 模式');
+				applyTheme();
+			}
+		};
+		if (mediaQuery.addEventListener) {
+			mediaQuery.addEventListener('change', onSystemThemeChange);
+		} else if (mediaQuery.addListener) {
+			mediaQuery.addListener(onSystemThemeChange);
+		}
+	}
 
 	// --- 布局恢复 -----------------------------------------------------------
 	function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
@@ -237,13 +301,31 @@
 			}
 		});
 
-		// 主题切换按钮
+		// ===== 主题切换按钮（三态轮换：dark → light → system → dark） =====
+		// 点击后计算下一个主题，写入 state.theme，由 setter 自动：
+		//   1) 持久化到 localStorage('pi-theme')
+		//   2) 派发 theme-changed 事件 → applyTheme()
+		// 按钮不存在时只告警，不抛错（避免阻塞其他初始化）
 		const btnTheme = $('btn-theme');
 		if (btnTheme) {
 			btnTheme.addEventListener('click', () => {
-				const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-				state.theme = next;  // 通过 setter 触发事件和持久化
+				try {
+					const current = state.theme || 'dark';
+					// 三态轮换顺序：dark → light → system → dark
+					// 默认是 dark（Codex 风格），点一下变 light，再点变 system，依此循环
+					const order = ['dark', 'light', 'system'];
+					const idx = order.indexOf(current);
+					// 防御：当前值不在表里（例如旧版本存了非法值）→ 回到 dark
+					const next = idx === -1 ? 'dark' : order[(idx + 1) % order.length];
+					console.log('[theme] 按钮点击：', current, '→', next);
+					state.theme = next;
+				} catch (e) {
+					console.error('[theme] 切换主题失败:', e);
+				}
 			});
+			console.log('[main] 主题切换按钮已绑定 (#btn-theme)');
+		} else {
+			console.warn('[main] #btn-theme 未找到，主题切换不可用');
 		}
 	}
 
@@ -274,10 +356,15 @@
 	// --- 折叠按钮 -----------------------------------------------------------
 	function bindCollapseButtons() {
 		// 左栏折叠按钮（#shell 左上角，红绿灯右侧）
+		// 注意：此按钮恒挂 #shell 左上角，位置永不随栏开关变化
 		if (btnShowSidebar) {
 			btnShowSidebar.addEventListener('click', () => {
+				console.log('[main] btn-show-sidebar clicked');
 				toggleSidebar();
 			});
+			console.log('[main] btn-show-sidebar 已绑定');
+		} else {
+			console.warn('[main] btn-show-sidebar 未找到！');
 		}
 
 		// 【重要】右栏开关 #btn-show-browser 不在此绑定：
@@ -291,16 +378,30 @@
 		// 已在 index.html 中隐藏，不再绑定事件，避免多个入口造成状态不同步
 	}
 
+	// 切换左栏显隐：只负责状态翻转，具体设置交给 setSidebarHidden
 	function toggleSidebar() {
 		const hidden = !sidebar.classList.contains('collapsed');
+		console.log('[main] toggleSidebar:', hidden);
 		setSidebarHidden(hidden);
 	}
 
+	// 设置左栏显隐：统一处理 class、CSS 变量、状态持久化、bounds 上报
 	function setSidebarHidden(hidden) {
+		console.log('[main] setSidebarHidden:', hidden);
+		
+		// 1. 切换折叠 class（控制 visibility 和 pointer-events）
 		sidebar.classList.toggle('collapsed', hidden);
+		
+		// 2. 设置轨道宽度变量（grid-template-columns 使用，0px 表示折叠）
 		document.documentElement.style.setProperty('--sidebar-track', hidden ? '0px' : '');
+		
+		// 3. 同步 shell class（用于兄弟选择器隐藏拖拽手柄）
 		if (shell) shell.classList.toggle('sidebar-hidden', hidden);
-		state.sidebarHidden = hidden;  // 持久化到 localStorage
+		
+		// 4. 持久化到 localStorage（state.js setter 会自动处理）
+		state.sidebarHidden = hidden;
+		
+		// 5. 上报 bounds（中栏宽度变了，浏览器 slot 位置也要变）
 		reportBoundsNow();
 	}
 

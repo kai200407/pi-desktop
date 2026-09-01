@@ -458,7 +458,7 @@
   // 兼容任务书命名：loadSessions = refreshSessions
   Sidebar.prototype.loadSessions = Sidebar.prototype.refreshSessions;
 
-  /* ---------------- 右键菜单（重命名 / 删除 / 复制 ID） ---------------- */
+  /* ---------------- 右键菜单（重命名 / 删除 / 复制 ID / 导出） ---------------- */
 
   Sidebar.prototype.openSessionCtxMenu = function (s, x, y) {
     var self = this;
@@ -487,11 +487,84 @@
       }).catch(function () { self.hooks.showNotice('复制失败'); });
     });
 
+    // ===== 导出子菜单 =====
+    // 分隔线
+    var sep = document.createElement('div');
+    sep.className = 'ctx-sep';
+    menu.appendChild(sep);
+
+    // 导出项（带子菜单）
+    var exportItem = document.createElement('div');
+    exportItem.className = 'ctx-item ctx-submenu';
+    exportItem.textContent = '导出...';
+    menu.appendChild(exportItem);
+
+    // 子菜单面板
+    var exportSubmenu = document.createElement('div');
+    exportSubmenu.className = 'ctx-submenu-panel';
+    exportSubmenu.style.display = 'none';
+
+    // 三种导出格式
+    var formats = [
+      { key: 'markdown', label: 'Markdown (.md)' },
+      { key: 'html', label: 'HTML (.html)' },
+      { key: 'jsonl', label: 'JSONL (.jsonl)' }
+    ];
+    formats.forEach(function (fmt) {
+      var subItem = document.createElement('div');
+      subItem.className = 'ctx-item';
+      subItem.textContent = fmt.label;
+      subItem.addEventListener('click', function () {
+        self.exportSession(s, fmt.key);
+        self.closePopovers();
+      });
+      exportSubmenu.appendChild(subItem);
+    });
+
+    menu.appendChild(exportSubmenu);
+
+    // hover 显示/隐藏子菜单
+    exportItem.addEventListener('mouseenter', function () {
+      exportSubmenu.style.display = 'block';
+    });
+    menu.addEventListener('mouseleave', function () {
+      exportSubmenu.style.display = 'none';
+    });
+
     this.positionPopoverXY(menu, x, y);
   };
 
   // 兼容任务书命名
   Sidebar.prototype.showContextMenu = Sidebar.prototype.openSessionCtxMenu;
+
+  /* ---------------- 会话导出 ---------------- */
+
+  /**
+   * 导出会话为指定格式
+   * 支持格式：markdown（纯文本）、html（带样式网页）、jsonl（原始数据）
+   * 成功/失败都会通过 showNotice 给用户反馈
+   */
+  Sidebar.prototype.exportSession = function (s, format) {
+    var self = this;
+    console.log('[Sidebar] exportSession:', s.id, format);
+    this.hooks.showNotice('正在导出...');
+
+    this.call('exportSession', s.id, format)
+      .then(function (result) {
+        if (result && result.ok) {
+          console.log('[Sidebar] 导出成功:', result.filePath);
+          self.hooks.showNotice('会话已导出: ' + result.filePath);
+        } else {
+          var errMsg = (result && result.error) || '未知错误';
+          console.error('[Sidebar] 导出失败:', errMsg);
+          self.hooks.showNotice('导出失败: ' + errMsg);
+        }
+      })
+      .catch(function (err) {
+        console.error('[Sidebar] 导出异常:', err);
+        self.hooks.showNotice('导出失败: ' + (err && err.message ? err.message : '网络错误'));
+      });
+  };
 
   // 重命名：行内输入覆盖在会话行上，Enter 确认 / Esc 取消。
   // 名字只存 localStorage['pi-session-names']，不改 jsonl 本体。

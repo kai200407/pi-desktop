@@ -187,6 +187,26 @@ function registerIpcHandlers(deps) {
 		}
 	});
 
+	// ==== 会话统计（Token 用量 / 缓存命中 / 成本 / 上下文占用）====
+	// 供中栏底部状态栏实时展示。pi SDK 的 session.getSessionStats() 是同步方法，
+	// 返回 { tokens:{input,output,cacheRead,cacheWrite,total}, cost,
+	//        contextUsage:{tokens,contextWindow,percent} }。
+	// 会话尚未就绪（pi 未初始化）或调用异常时返回 null，渲染层据此隐藏状态栏。
+	ipcMain.handle("pi:getSessionStats", async () => {
+		try {
+			const p = pi();
+			if (!p || !p.runtime || !p.runtime.session) return null;
+			const sess = p.runtime.session;
+			if (typeof sess.getSessionStats !== "function") return null;
+			const stats = sess.getSessionStats();
+			if (process.env.PI_DESKTOP_DEBUG_STATS) console.log("[IPC] getSessionStats:", stats);
+			return stats || null;
+		} catch (err) {
+			console.error("[IPC] getSessionStats 失败:", err && err.message);
+			return null;
+		}
+	});
+
 	// ===== 会话管理 =====
 	// 临时聊天：不落盘的会话。当前已是 inMemory 时直接 newSession
 	// （pi 的 newSession 会检查 isPersisted() 并保持 inMemory，不会意外落盘）。
@@ -376,6 +396,70 @@ function registerIpcHandlers(deps) {
 			return out.sort((a, b) => b.mtime - a.mtime).slice(0, 60);
 		} catch {
 			return [];
+		}
+	});
+
+	// ===== 会话导出 =====
+	// 支持三种格式：
+	//   - markdown: 纯文本，适合阅读/分享/归档，自实现
+	//   - html:     带样式的网页，适合展示/打印，pi SDK 原生 /export 命令
+	//   - jsonl:    原始数据，适合程序处理/导入其他系统，pi SDK 原生 /export 命令
+	ipcMain.handle("pi:exportSession", async (_e, { sessionId, format }) => {
+		console.log('[IPC] exportSession:', sessionId, format);
+		
+		// 校验参数
+		if (!sessionId || typeof sessionId !== 'string') {
+			return { ok: false, error: '无效的会话 ID' };
+		}
+		if (!['markdown', 'html', 'jsonl'].includes(format)) {
+			return { ok: false, error: '不支持的导出格式: ' + format };
+		}
+
+		const p = pi();
+		if (!p || !p.runtime) {
+			return { ok: false, error: 'pi 引擎未初始化' };
+		}
+
+		try {
+			let content;
+			let ext;
+			const timestamp = Date.now();
+
+			if (format === 'html' || format === 'jsonl') {
+				// 使用 pi SDK 原生 /export 命令
+				const tempFile = path.join(os.tmpdir(), `pi-export-${timestamp}.${format}`);
+				await p.runtime.executeCommand(`/export ${tempFile}`);
+				content = fs.readFileSync(tempFile, 'utf8');
+				fs.unlinkSync(tempFile);
+				ext = format;
+			} else if (format === 'markdown') {
+				// 自定义 Markdown 导出：从当前会话消息构建可读文本
+				const messages = p.runtime.session.getMessages();
+				content = exportToMarkdown(messages, sessionId);
+				ext = 'md';
+			}
+
+			// 弹出保存对话框
+			const { filePath } = await dialog.showSaveDialog(getWin(), {
+				title: '导出会话',
+				defaultPath: `session-${timestamp}.${ext}`,
+				filters: [
+					{ name: format === 'markdown' ? 'Markdown' : format.toUpperCase(), extensions: [ext] },
+					{ name: '所有文件', extensions: ['*'] }
+				]
+			});
+
+			if (!filePath) {
+				return { ok: false, error: '用户取消导出' };
+			}
+
+			fs.writeFileSync(filePath, content, 'utf8');
+			console.log('[IPC] 导出成功:', filePath);
+			return { ok: true, filePath };
+
+		} catch (err) {
+			console.error('[IPC] 导出失败:', err);
+			return { ok: false, error: err.message || '导出过程发生未知错误' };
 		}
 	});
 
@@ -577,6 +661,116 @@ function registerIpcHandlers(deps) {
 	ipcMain.handle("chrome:status", () => chromeBridge.chromeStatus());
 	ipcMain.handle("chrome:go", (_e, url) => chromeBridge.chromeGo(url));
 	ipcMain.handle("chrome:close", () => chromeBridge.closeChrome());
+}
+
+/* ---------------- 会话导出辅助函数 ---------------- */
+
+/**
+ * 将会话消息导出为 Markdown 格式
+ * 用途：生成纯文本的会话记录，适合阅读、分享、归档、版本控制
+ * @param {Array} messages - pi 会话的消息数组
+ * @param {string} sessionId - 会话 ID（用于元信息）
+ * @returns {string} Markdown 格式的文本
+ */
+function exportToMarkdown(messages, sessionId) {
+	const lines = [];
+	
+	// 文档头部：标题 + 元信息
+	lines.push('# 会话导出');
+	lines.push('');
+	lines.push(`- 导出时间: ${new Date().toLocaleString()}`);
+	lines.push(`- 会话 ID: ${sessionId || 'unknown'}`);
+	lines.push(`- 消息数量: ${messages.length}`);
+	lines.push('');
+	lines.push('---');
+	lines.push('');
+
+	// 逐条处理消息
+	messages.forEach((msg, i) => {
+		const msgNum = i + 1;
+		
+		if (msg.role === 'user') {
+			lines.push(`## 用户 (${msgNum})`);
+			lines.push('');
+			// 用户消息可能是纯文本或 content blocks
+			const text = extractTextContent(msg);
+			lines.push(text);
+			lines.push('');
+			
+		} else if (msg.role === 'assistant') {
+			lines.push(`## 助手 (${msgNum})`);
+			lines.push('');
+			
+			// 助手消息可能包含 text 和 tool_use blocks
+			if (typeof msg.content === 'string') {
+				lines.push(msg.content);
+			} else if (Array.isArray(msg.content)) {
+				msg.content.forEach(block => {
+					if (block.type === 'text') {
+						lines.push(block.text);
+					} else if (block.type === 'tool_use') {
+						lines.push(`> [工具调用: ${block.name}]`);
+						if (block.input) {
+							lines.push('> ```json');
+							lines.push('> ' + JSON.stringify(block.input, null, 2).replace(/\n/g, '\n> '));
+							lines.push('> ```');
+						}
+						lines.push('');
+					} else if (block.type === 'thinking') {
+						// 思考过程默认折叠，用 details 标签
+						lines.push('<details>');
+						lines.push('<summary>思考过程</summary>');
+						lines.push('');
+						lines.push(block.thinking || '');
+						lines.push('');
+						lines.push('</details>');
+						lines.push('');
+					}
+				});
+			}
+			lines.push('');
+			
+		} else if (msg.role === 'tool') {
+			// 工具返回结果
+			lines.push(`### 工具结果 (${msgNum})`);
+			lines.push('');
+			const text = extractTextContent(msg);
+			// 工具结果通常是代码输出，用代码块包裹
+			if (text.includes('\n') || text.length > 80) {
+				lines.push('```');
+				lines.push(text);
+				lines.push('```');
+			} else {
+				lines.push(text);
+			}
+			lines.push('');
+		}
+		
+		// 消息之间的分隔线
+		if (i < messages.length - 1) {
+			lines.push('---');
+			lines.push('');
+		}
+	});
+
+	return lines.join('\n');
+}
+
+/**
+ * 从消息对象中提取纯文本内容
+ * 处理 string 和 content blocks 两种格式
+ */
+function extractTextContent(msg) {
+	if (typeof msg.content === 'string') {
+		return msg.content;
+	}
+	if (Array.isArray(msg.content)) {
+		return msg.content
+			.filter(block => block.type === 'text')
+			.map(block => block.text)
+			.join('\n');
+	}
+	return '[无法解析的消息内容]';
 }
 
 module.exports = { registerIpcHandlers };

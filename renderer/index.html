@@ -183,6 +183,18 @@
         </div>
       </div>
 
+      <!-- 会话统计状态栏：上下文占用 · 缓存命中率 · 累计成本。
+           数据来自主进程 pi:getSessionStats（pi SDK session.getSessionStats()），
+           在 agent_end / compaction / session_restored 后由 conversation.js 刷新。
+           无数据时保持 hidden。 -->
+      <div id="session-stats-bar" class="session-stats-bar hidden" title="会话统计">
+        <span id="stats-context" class="stat-item" title="上下文占用">--</span>
+        <span class="stat-sep">·</span>
+        <span id="stats-cache" class="stat-item" title="缓存命中率">--</span>
+        <span class="stat-sep">·</span>
+        <span id="stats-cost" class="stat-item" title="累计成本">--</span>
+      </div>
+
       <!-- 输入区：空状态标题 + 输入卡片 + 卡片下方上下文行 -->
       <div class="composer-wrap">
         <!-- 空状态标题：有消息后由 markUsed() 打 .hidden -->

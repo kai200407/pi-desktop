@@ -50,6 +50,18 @@
   --shadow-pane: 0 1px 3px rgba(0, 0, 0, .06);
 }
 
+/* =========================================================================
+   主题配色规则
+   -------------------------------------------------------------------------
+   - :root 默认携带亮色（light）配色，作为「未指定主题 / data-theme=light」的兜底
+   - [data-theme="dark"]  显式覆盖为暗色
+   - [data-theme="light"] 显式声明一次（与 :root 同值），便于：
+       1) 阅读 / 维护时一目了然 light 是独立主题
+       2) system 模式下用 JS 算出 prefers-color-scheme 结果后仍写 light/dark，
+          两种路径走同一份规则，无分叉
+       3) 未来调整 light 配色时不需要动 :root（避免影响未覆盖的派生场景）
+   ========================================================================= */
+
 /* 暗色为默认主题（html 上已写死 data-theme="dark"），配色贴近 Codex 桌面端 */
 [data-theme="dark"] {
   --bg-window: #0d0d0d;
@@ -74,6 +86,35 @@
   --shadow-pane: none;
 }
 
+/* ===== 亮色主题（显式规则，与 :root 中的默认值保持一致） =====
+   之所以重复声明而非依赖 :root 兜底：
+   - 让「light」成为一等公民主题，便于 JS 层在 light/dark/system 三态之间统一切换
+   - 后续微调 light 配色时只动这一段，不影响 :root 的全局默认值
+   - 图标显示规则（.icon-sun / .icon-moon）有明确的 [data-theme] 钩子可挂
+*/
+[data-theme="light"] {
+  --bg-window: #e8e6e1;
+  --bg: #ffffff;
+  --bg-elevated: #f9f9f9;
+  --bg-sidebar: #f9f9f9;
+  --bg-hover: rgba(0, 0, 0, .05);
+  --bg-active: rgba(0, 0, 0, .08);
+  --bg-bubble: #f0f0f0;
+  --bg-code: #1e1e20;                 /* 代码块在亮色下仍保持深色，保证可读性 */
+  --bg-input: #ffffff;
+  --border: rgba(0, 0, 0, .1);
+  --border-strong: rgba(0, 0, 0, .18);
+  --text: #0d0d0d;
+  --text-secondary: #5d5d5d;
+  --text-tertiary: #8f8f8f;
+  --text-code: #e6e6e6;
+  --accent: #0d0d0d;
+  --accent-text: #ffffff;
+  --success: #14a44d;
+  --danger: #e5484d;
+  --shadow-pane: 0 1px 3px rgba(0, 0, 0, .06);
+}
+
 /* ---------------- 基础 ---------------- */
 * { box-sizing: border-box; }
 
@@ -86,8 +127,10 @@ html, body {
 body {
   display: flex;
   flex-direction: column;
-  /* 四周留窗口底色，让 #shell 看起来像内嵌卡片（顶部同样留白，红绿灯浮在上面） */
-  padding: var(--shell-inset);
+  /* ===== 布局优化：去掉 body 内边距，让 #shell 平铺到窗口边缘 =====
+     原来: padding: var(--shell-inset);   // 8px，露出窗口底色形成「内嵌卡片感」
+     现在: 0，壳层占满整个视口，消除覆盖感（对齐 Codex 桌面端） */
+  padding: 0;
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.6;
@@ -156,6 +199,9 @@ svg {
 .icon-sun { display: none; }
 [data-theme="dark"] .icon-moon { display: none; }
 [data-theme="dark"] .icon-sun { display: block; }
+/* 显式 light 规则，与 dark 对称，便于日后加 system 模式时保持结构一致 */
+[data-theme="light"] .icon-moon { display: block; }
+[data-theme="light"] .icon-sun { display: none; }
 
 /* 工具行 pill 按钮（模型 / 思考等级），位于输入卡片底部，替代原生 select */
 .pill-btn {
@@ -306,7 +352,7 @@ svg {
 .thinking-pop .check { flex: 0 0 auto; visibility: hidden; color: var(--text); }
 .thinking-pop .thinking-opt.selected .check { visibility: visible; }
 
-/* ---------------- 三栏 grid（内嵌卡片：圆角 + 边框） ---------------- */
+/* ---------------- 三栏 grid（平铺到窗口边缘：无圆角、无边框） ---------------- */
 #shell {
   position: relative;                                /* 栏宽拖拽手柄的定位参照 */
   flex: 1;
@@ -321,10 +367,12 @@ svg {
     var(--sidebar-track, var(--sidebar-width))
     minmax(0, 1fr)
     var(--browser-track, var(--browser-width));
-  border: 1px solid var(--border);
-  border-radius: var(--shell-radius);
-  background: var(--bg);
-  overflow: hidden;                                  /* 子元素不出圆角 */
+  /* ===== 布局优化：去掉壳层的卡片包装 =====
+     原来: border: 1px solid var(--border);
+     原来: border-radius: var(--shell-radius);   // 10px
+     原因: 平铺后不再需要描边和圆角，消除「浮在窗口上的卡片」观感 */
+  background: var(--bg);                             /* 统一主背景，三栏共用一档底色 */
+  overflow: hidden;                                  /* 内容不溢出窗口 */
 }
 
 /* 折叠态：轨道归零。同时用 clip 隐藏内容（不用 display:none —— 会触发上面的坑） */
@@ -403,8 +451,8 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 #shell { /* 已是 position:relative，两个折叠把手都锚在这 */ }
 
 /* ---- 第一行：工具行（红绿灯留白 + 折叠/后退/前进） ----
-   主进程 trafficLightPosition = {x:16, y:15}，body 已留 8px 内边距，
-   所以红绿灯在本行内部坐标约 (8, 7) 处。本行高 46px、左侧碬 78px 占位，
+   主进程 trafficLightPosition = {x:16, y:15}（body 平铺后无内边距，红绿灯在
+   本行内部坐标约 (16, 15) 处）。本行高 46px、左侧碬 78px 占位，
    按钮从 78px 之后开始，永远不会被红绿灯遮住。 */
 .sb-tools {
   flex: 0 0 var(--height-toolbar);
@@ -756,7 +804,9 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--bg);
+  /* ===== 布局优化：中栏透明，直接继承 #shell 的统一背景，减少一层色差 =====
+     原来: background: var(--bg);   // 与 shell 同值，叠加显层叠 */
+  background: transparent;
 }
 
 .thread {
@@ -892,6 +942,17 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   font-size: 11px;
 }
 .copy-btn:hover { background: rgba(255, 255, 255, .1); color: #e6e6e6; }
+/* 复制成功态：绿色底白字 */
+.copy-btn.copied {
+  background: #10b981;
+  color: #fff;
+}
+
+/* ---- 代码块简单语法高亮 ---- */
+.hl-keyword { color: #c678dd; font-weight: 500; }  /* 紫色：关键词 */
+.hl-string  { color: #98c379; }                     /* 绿色：字符串 */
+.hl-comment { color: #5c6370; font-style: italic; } /* 灰色：注释 */
+.hl-number  { color: #d19a66; }                     /* 橙色：数字 */
 .codeblock pre {
   margin: 0;
   padding: calc(var(--spacing) * 3);
@@ -1033,6 +1094,35 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   font-size: 12.5px;
   white-space: pre-wrap;
 }
+
+/* ---------------- 会话统计状态栏（中栏底部、输入卡片上方） ---------------- */
+/* 灰色小字一行：上下文占用 · 缓存命中率 · 累计成本。
+   与输入卡片同宽（max-width 对齐 thread 内容区），居中展示。 */
+.session-stats-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: var(--thread-content-max-width);
+  margin: 0 auto;
+  padding: 2px 12px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-stats-bar.hidden { display: none; }
+
+.stat-item { cursor: default; }
+/* 预留：后续点击展开详细 breakdown 时的悬停反馈钩子 */
+.session-stats-bar.clickable .stat-item { cursor: pointer; }
+.session-stats-bar.clickable .stat-item:hover { color: var(--text-secondary); }
+
+.stat-sep { color: var(--border-strong); }
 
 /* ---------------- 输入区（卡片） ---------------- */
 .composer-wrap {
@@ -1184,7 +1274,10 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   flex-direction: column;
   min-height: 0;
   border-left: 1px solid var(--border);
-  background: var(--bg-elevated);
+  /* ===== 布局优化：右栏透明，继承 #shell 背景，与左/中栏只保留一档色差 =====
+     原来: background: var(--bg-elevated);   // #232323，第三档深色加重层叠感
+     说明: 内部 WebContentsView 会覆盖大部分区域，底色几乎看不见 */
+  background: transparent;
 }
 /* （旧 display:none 折叠已废 —— 改为轨道归零+visibility） */
 
@@ -1675,6 +1768,39 @@ mark.find-cur { background: rgba(250, 204, 21, .8); color: #1a1a1a; }
 .ctx-item-btn:hover { background: var(--bg-hover); color: var(--text); }
 .ctx-item-btn.danger { color: var(--danger); }
 .ctx-item-btn.danger:hover { background: var(--bg-hover); }
+
+/* ===== 右键菜单子菜单 ===== */
+.ctx-submenu {
+  position: relative;
+}
+
+.ctx-submenu::after {
+  content: '▶';
+  position: absolute;
+  right: 8px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.ctx-submenu-panel {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 150px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  padding: 4px 0;
+  margin-left: 4px;
+  z-index: 1001;
+}
+
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
 
 /* ---------------- 下载弹层 ---------------- */
 .download-pop {

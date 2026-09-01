@@ -124,6 +124,17 @@
     return invoke('compact', []);
   };
 
+  /**
+   * 获取会话统计（Token 用量 / 缓存命中 / 成本 / 上下文占用）
+   * 中栏底部状态栏用。会话未就绪时主进程返回 null。
+   * @returns {Promise<null|{tokens:{input:number,output:number,cacheRead:number,cacheWrite:number,total:number},
+   *                          cost:number,
+   *                          contextUsage:{tokens:number,contextWindow:number,percent:number}}>}
+   */
+  IpcClient.prototype.getSessionStats = function () {
+    return invoke('getSessionStats', []);
+  };
+
   /* =======================================================================
      二、会话管理
      ======================================================================= */
