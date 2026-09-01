@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld("piAPI", {
 	// 工作区管理：从最近列表移除（不动 sessions 目录下的历史会话文件）
 	removeRecentCwd: (dir) => ipcRenderer.invoke("pi:removeRecentCwd", dir),
 
+	// ---- 文件选择（附件按钮） ----
+	selectFile: () => ipcRenderer.invoke("pi:selectFile"),
+
 	// ---- 右栏浏览器 ----
 	browserGo: (url) => ipcRenderer.invoke("browser:go", url),
 	browserBack: () => ipcRenderer.invoke("browser:back"),

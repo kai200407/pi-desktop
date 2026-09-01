@@ -1,180 +1,140 @@
-# pi-desktop 启动速度优化实施报告
+# Codex风格界面优化 - 实施报告
 
-## 优化目标
-让 pi-desktop 启动速度像 Codex 一样快速响应，目标启动时间 <500ms。
+## 修改文件列表
 
-## 问题分析
+| 文件 | 改动类型 | 说明 |
+|------|---------|------|
+| `src/main/ipc-handlers.js` | 新增 | `pi:selectFile` IPC handler（文件选择对话框） |
+| `preload.js` | 新增 | 暴露 `selectFile` API 到渲染层 |
+| `renderer/index.html` | 修改 | 替换 conversation-toolbar 为 conversation-breadcrumb；简化左侧栏；添加附件按钮 |
+| `renderer/styles.css` | 修改 | 新增面包屑导航样式 + 工作区编辑器弹窗样式；隐藏旧工具栏 |
+| `renderer/js/breadcrumb.js` | **新增** | 面包屑导航模块（工作区显示/切换/编辑/更多/分享） |
+| `renderer/js/main.js` | 修改 | 初始化 Breadcrumb 模块；绑定附件按钮事件 |
+| `renderer/js/conversation.js` | 修改 | 移除旧工作区选择器代码（已迁移到 breadcrumb.js） |
+| `renderer/js/sidebar.js` | 修改 | 移除 btn-add-project 事件绑定 |
 
-### 1. 同步加载会话列表阻塞启动
-- **位置**: `renderer/js/sidebar.js` 第845行
-- **问题**: `init()` 方法中同步调用 `initCwd()` 和 `refreshSessions()`
-- **影响**: `refreshSessions()` → `listSessionsGrouped` IPC → 扫描 `~/.pi/agent/sessions` 目录，耗时操作阻塞界面渲染
+## 四项优化详情
 
-### 2. 初始化顺序不合理
-- **位置**: `renderer/js/main.js`
-- **问题**: `initSidebar()` 阻塞执行，导致后续模块无法初始化
-- **影响**: 整个初始化流程被会话列表加载拖慢
+### 优化1：面包屑导航（对话区顶部）⭐⭐⭐ 最重要
 
-### 3. 缺少缓存机制
-- **位置**: `src/main/session-mgmt.js`
-- **问题**: 每次调用 `listSessionsGrouped()` 都重新扫描文件系统
-- **影响**: 重复扫描耗时，特别是会话文件多时
+**移除**：旧的 `conversation-toolbar`（工作区选择器 + 新对话按钮）
 
-## 优化方案实施
+**新增**：`.conversation-breadcrumb` 紧凑面包屑导航
+- 第一行：📂 图标 + 工作区名称（可点击切换）+ 更多选项按钮 + 分享按钮
+- 第二行：会话数统计 + 工作区路径（缩写~）+ 「编辑」按钮
 
-### 方案1: 异步加载会话列表（P0）
+**功能**：
+- 点击工作区名称 → 弹出工作区切换菜单（复用原有 workspace-menu 弹层）
+- 点击「编辑」→ 弹出工作区编辑器（查看信息/从列表移除）
+- 点击「更多」→ 快捷菜单（导出对话/工作区设置）
+- 点击「分享」→ 导出当前对话为 Markdown
 
-**核心思路**: 先渲染空界面，后台异步加载数据
+### 优化2：左侧栏简化 ⭐⭐⭐
 
-**修改文件**: `renderer/js/sidebar.js`
+**移除**：`#btn-add-project`（项目标题旁的 [+] 按钮）
 
-**改动内容**:
-1. **修改 `init()` 方法**（第845行附近）:
-   - 移除同步调用 `this.initCwd()` 和 `this.refreshSessions()`
-   - 改为异步调用 `this.initCwdAsync()` 和 `this.refreshSessionsAsync()`
-   - 添加 `this.showLoadingState()` 立即显示加载提示
+**效果**：左侧栏「项目」标题变为纯文本，工作区切换入口统一收拢到面包屑导航
 
-2. **新增 `showLoadingState()` 方法**:
-   - 在会话列表区域显示"加载会话列表中..."占位提示
-   - 使用内联样式，避免依赖外部 CSS
+### 优化3：输入区附件按钮 ⭐⭐
 
-3. **新增 `showError(msg)` 方法**:
-   - 显示错误提示（如"会话列表加载失败"）
-   - 红色文字，醒目提示
+**激活**：`#btn-attach` 按钮（原本只是占位符）
 
-4. **新增 `refreshSessionsAsync()` 方法**:
-   - 异步调用 `listSessionsGrouped` IPC
-   - 使用 `console.time/timeEnd` 追踪加载耗时
-   - 成功后更新 `sessionGroups` 并渲染
-   - 失败后显示错误提示
+**功能**：
+- 点击 → 调用 `pi:selectFile` 弹出系统文件选择器
+- 支持文件类型过滤（图片/文档/代码/所有文件）
+- 选择后自动将文件路径插入输入框（前缀「请分析这个文件： 」）
 
-5. **新增 `initCwdAsync()` 方法**:
-   - 异步调用 `getCwd` IPC
-   - 使用 `console.time/timeEnd` 追踪耗时
-   - 成功后更新当前工作区显示
+### 优化4：工作区编辑弹窗 ⭐
 
-**效果**: 
-- 界面立即渲染（<500ms）
-- 会话列表后台加载（可能1-3秒，但不阻塞）
-- 用户体验大幅提升
+**新增**：`.workspace-editor-modal` Codex风格模态框
 
-### 方案2: 预加载缓存（P1）
+**功能**：
+- 显示当前工作区名称、路径、会话数
+- 「从列表移除」按钮（从 recentCwds 移除，不删历史会话文件）
+- 「保存」按钮（预留工作区别名功能）
 
-**核心思路**: 主进程启动时预加载会话列表到内存缓存，首次 IPC 调用直接返回缓存
+## 功能验证结果
 
-**修改文件**: `src/main/session-mgmt.js`
+### 静态检查
+- [x] `node --check` 通过所有 JS 文件（main.js / breadcrumb.js / conversation.js / sidebar.js / ipc-handlers.js / preload.js）
+- [x] CSS 大括号配对检查通过（balance = 0）
 
-**改动内容**:
-1. **修改 `constructor`**（第180行附近）:
-   - 添加 `_sessionListCache` 缓存字段
-   - 添加 `_cacheTime` 缓存时间戳
-   - 添加 `CACHE_TTL = 5000` 缓存有效期（5秒）
+### 运行时验证（CDP实测）
+- [x] `#conversation-breadcrumb` 元素存在
+- [x] `#conversation-toolbar` 已隐藏（display: none）
+- [x] `#btn-attach` 存在且可用
+- [x] `#btn-add-project` 已移除
+- [x] `window.Breadcrumb` 类已加载
+- [x] `window.__breadcrumb` 实例已创建
+- [x] 面包屑显示当前工作区名称（实测： "tmp"）
+- [x] 面包屑显示会话数量（实测： "6 个会话"）
+- [x] 面包屑显示工作区路径（实测： "/private/tmp"）
 
-2. **新增 `preloadSessions()` 方法**:
-   - 启动时调用，不等待完成
-   - 调用 `listSessionsGrouped()` 填充缓存
-   - 使用 `console.time/timeEnd` 追踪预加载耗时
+### 兼容性检查
+- [x] 会话切换功能不受影响（sidebar.js 仅移除按钮绑定，核心逻辑保留）
+- [x] 工作区切换功能不受影响（复用原有 workspace-menu 弹层逻辑）
+- [x] 深浅色主题均适配（使用 CSS 变量，无硬编码颜色）
 
-3. **修改 `listSessionsGrouped()` 方法**:
-   - 开头检查缓存是否有效（<5秒）
-   - 缓存命中直接返回，避免重复扫描
-   - 缓存未命中执行扫描，完成后更新缓存
-   - 添加详细的日志输出（扫描耗时、缓存命中等）
+## 架构说明
 
-**修改文件**: `src/main/index.js`
-
-**改动内容**:
-- 在 `initModules()` 末尾调用 `sessionMgr.preloadSessions()`
-- 不等待预加载完成，继续初始化流程
-
-**效果**:
-- 首次 IPC 调用直接返回缓存（<10ms）
-- 5秒内的重复调用也使用缓存
-- 预加载在后台执行，不影响启动速度
-
-### 方案3: 性能监控日志
-
-**修改文件**: `renderer/js/main.js`
-
-**改动内容**:
-- 在 `init()` 方法开头添加 `console.time('[main] 总初始化时间')`
-- 在 `init()` 方法末尾添加 `console.timeEnd('[main] 总初始化时间')`
-- 修改日志输出为"init() 完成（数据异步加载中）"
-
-**效果**:
-- 可在 DevTools Console 中查看总初始化时间
-- 验证优化效果（目标 <500ms）
-
-## 验证方法
-
-启动应用后，在 DevTools Console 中查看日志：
-
+### 模块职责
 ```
-[main] 总初始化时间: 350ms  ← 目标 <500ms
-[SessionManager] 预加载会话列表...
-[SessionManager] 扫描会话列表: 1200ms
-[SessionManager] 会话列表已缓存，共 15 个项目
-[SessionManager] 预加载耗时: 1205ms
-[SessionManager] 预加载完成
-[Sidebar] 会话列表加载: 5ms  ← 从缓存读取，极快
-[Sidebar] 会话列表加载完成，共 15 个项目
-[Sidebar] 工作区获取: 3ms
+┌─────────────────────────────────────────┐
+│  Breadcrumb (新)                        │
+│  - 工作区名称/路径/会话数显示            │
+│  - 工作区切换菜单（复用 workspace-menu） │
+│  - 工作区编辑弹窗                        │
+│  - 更多选项菜单                          │
+│  - 分享/导出对话                         │
+└─────────────────────────────────────────┘
+                   │
+┌─────────────────────────────────────────┐
+│  Conversation                           │
+│  - 对话流渲染/流式输出/输入框            │
+│  - 模型选择器/思考等级选择器             │
+│  - ⌘F查找/压缩横条                      │
+│  - 【已移除】工作区选择器相关代码         │
+└─────────────────────────────────────────┘
+                   │
+┌─────────────────────────────────────────┐
+│  Sidebar                                │
+│  - 会话列表/项目分组/搜索/归档           │
+│  - 【已移除】btn-add-project 按钮绑定     │
+└─────────────────────────────────────────┘
 ```
 
-**关键指标**:
-- `总初始化时间` < 500ms ✓
-- `会话列表加载` < 10ms（缓存命中）✓
-- `预加载耗时` 1-3秒（后台执行，不阻塞）✓
+### 数据流
+```
+主进程 session_info 事件
+    ↓
+Breadcrumb.updateBreadcrumb(info)
+    ↓
+更新 bc-workspace-name / bc-workspace-path
 
-## 代码质量保证
+主进程 recent_cwds 事件
+    ↓
+Breadcrumb.updateWorkspaceDisplay()
+    ↓
+重新拉取 pi:getCwd 更新显示
+```
 
-1. **清晰注释**: 所有新方法都有详细注释说明用途和原因
-2. **错误处理**: 异步加载失败显示错误提示，避免静默失败
-3. **加载状态**: 显示"加载中..."占位，避免空白
-4. **日志输出**: 关键步骤使用 `console.time/timeEnd` 追踪耗时
-5. **兼容性**: 保留原有的 `refreshSessions()` 和 `initCwd()` 方法，不破坏现有功能
+## 建议的下一步优化
 
-## 输出文件
+1. **工作区别名**：当前「编辑」弹窗的保存按钮是预留功能，可实现自定义工作区显示名（存 localStorage 或配置文件）
 
-1. ✅ `renderer/js/sidebar.js` - 异步加载会话列表
-2. ✅ `src/main/session-mgmt.js` - 缓存机制和预加载
-3. ✅ `src/main/index.js` - 预加载调用
-4. ✅ `renderer/js/main.js` - 性能监控日志
+2. **附件预览**：选择文件后可在输入框上方显示文件卡片（名称+大小+图标），发送时作为上下文传给 pi
 
-## 优化效果预测
+3. **分享增强**：当前分享=导出 Markdown，可扩展为：
+   - 生成分享链接（通过 gist 或内部服务）
+   - 导出为 HTML/PDF
+   - 复制为富文本
 
-**优化前**:
-- 启动时间: 2-3秒
-- 用户体验: 白屏等待，界面无响应
+4. **面包屑路径点击**：点击路径段可快速跳转到上级目录作为新工作区
 
-**优化后**:
-- 启动时间: <500ms
-- 用户体验: 界面立即渲染，数据后台加载
-- 首次会话列表: 从缓存读取（<10ms）
+5. **会话数实时更新**：当前仅在初始化和 recent_cwds 变化时更新，可监听 agent_end 事件实现更实时的统计
 
-## 后续优化建议
+##  Commit
 
-1. **模型列表延迟加载**（P2）:
-   - 在用户点击模型选择器时再加载
-   - 减少初始化时的 IPC 调用
-   - 改动: `renderer/js/conversation.js`
-
-2. **会话列表分页**（P3）:
-   - 如果会话数量过多（>100），可考虑分页加载
-   - 首次只加载最近 20 个项目
-   - 滚动到底部时再加载更多
-
-3. **IndexedDB 缓存**（P4）:
-   - 将会话列表缓存到 IndexedDB
-   - 启动时先从 IndexedDB 读取（<50ms）
-   - 后台异步更新缓存
-
-## 实施总结
-
-本次优化采用**方案1 + 方案2**组合，实现了：
-- ✅ 异步加载会话列表，不阻塞界面渲染
-- ✅ 预加载缓存机制，首次 IPC 调用极快
-- ✅ 加载状态提示，用户体验友好
-- ✅ 性能监控日志，便于验证优化效果
-
-所有修改均已通过语法检查，代码质量符合要求。预计优化后启动时间 <500ms，达到 Codex 级别的响应速度。
+```
+a66ec17 feat: Codex风格界面优化 - 面包屑导航/左侧栏简化/附件按钮
+```

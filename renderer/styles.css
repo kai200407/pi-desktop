@@ -1901,18 +1901,156 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 /* =======================================================================
    中栏顶部工具栏（conversation-toolbar）
    位置：#thread 上方，跨整个中栏。内含工作区选择器 + 新对话按钮。
+   【已废弃】由 .conversation-breadcrumb 替代，保留样式仅作历史参考。
    ======================================================================= */
 .conversation-toolbar {
-  display: flex; align-items: center; gap: calc(var(--spacing) * 3);
-  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  /* 避免被 .thread 的滚动条影响 */
-  position: relative; z-index: 2;
+  display: none !important;  /* 隐藏旧工具栏 */
 }
 
-/* 工作区选择器容器：占满剩余宽度 */
+/* =======================================================================
+   面包屑导航（Codex风格）
+   紧凑显示当前工作区 + 会话统计，替代旧的笨重工作区选择器
+   ======================================================================= */
+.conversation-breadcrumb {
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 4) calc(var(--spacing) * 2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+}
+
+.bc-main {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  margin-bottom: calc(var(--spacing) * 1.5);
+}
+
+.bc-icon {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+}
+.bc-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.bc-workspace {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: calc(var(--spacing) * 1) calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  transition: background 0.15s;
+}
+
+.bc-workspace:hover {
+  background: var(--bg-hover);
+}
+
+.bc-arrow {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .5;
+  transition: transform .15s;
+}
+.bc-workspace.open .bc-arrow { transform: rotate(180deg); }
+
+.bc-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1);
+}
+
+.bc-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s;
+}
+
+.bc-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: var(--text-tertiary);
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bc-btn:hover {
+  background: var(--bg-hover);
+}
+
+.bc-btn:hover svg {
+  stroke: var(--text);
+}
+
+/* 第二行：详细信息 */
+.bc-details {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  padding-left: calc(var(--spacing) * 5.5); /* 与工作区名称对齐 */
+}
+
+.bc-stat {
+  color: var(--text-tertiary);
+}
+
+.bc-sep {
+  color: var(--border);
+}
+
+.bc-path {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bc-edit {
+  color: var(--text-link, var(--accent));
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: calc(var(--spacing) * 0.5) calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+
+.bc-edit:hover {
+  background: var(--bg-hover);
+}
+
+/* 旧的工作区选择器样式（保留但不再使用） */
 .workspace-selector {
   flex: 1; min-width: 0;
   display: flex; align-items: center;
@@ -2511,4 +2649,140 @@ mark.find-cur { background: rgba(250, 204, 21, .8); color: #1a1a1a; }
 .copy-feedback-bubble.show {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
+}
+
+/* ========================================================================
+   工作区编辑器弹窗（Codex风格）
+   从面包屑「编辑」按钮触发，用于编辑/删除工作区
+   ======================================================================== */
+.workspace-editor-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-editor-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.workspace-editor-content {
+  position: relative;
+  width: 480px;
+  max-width: 90vw;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: calc(var(--spacing) * 6);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.workspace-editor-content h3 {
+  margin: 0 0 calc(var(--spacing) * 5);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.we-form {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 4);
+  margin-bottom: calc(var(--spacing) * 6);
+}
+
+.we-form label {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.we-form label > span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.we-input {
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle, var(--bg-elevated));
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+
+.we-input:focus {
+  outline: none;
+  border-color: var(--text-link, var(--accent));
+}
+
+.we-input:read-only {
+  background: var(--bg-hover);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.we-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.we-actions-right {
+  display: flex;
+  gap: calc(var(--spacing) * 2);
+}
+
+.we-btn {
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.we-btn-primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.we-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.we-btn-secondary {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.we-btn-secondary:hover {
+  background: var(--border);
+}
+
+.we-btn-danger {
+  background: none;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.we-btn-danger:hover {
+  background: var(--danger);
+  color: white;
 }

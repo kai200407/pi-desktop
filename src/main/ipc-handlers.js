@@ -651,6 +651,23 @@ function registerIpcHandlers(deps) {
 		}
 	});
 
+	// ===== 文件选择（附件按钮） =====
+	ipcMain.handle("pi:selectFile", async (event) => {
+		const result = await dialog.showOpenDialog(getWin(), {
+			properties: ["openFile"],
+			filters: [
+				{ name: "所有文件", extensions: ["*"] },
+				{ name: "图片", extensions: ["jpg", "jpeg", "png", "gif", "webp", "svg"] },
+				{ name: "文档", extensions: ["txt", "md", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"] },
+				{ name: "代码", extensions: ["js", "ts", "py", "java", "cpp", "go", "rs", "json", "yaml", "yml"] },
+			],
+		});
+		if (result.canceled || !result.filePaths[0]) {
+			return { ok: false };
+		}
+		return { ok: true, filePath: result.filePaths[0] };
+	});
+
 	// ===== 浏览器控制 =====
 	// ==== 右栏浏览器 ====
 	ipcMain.handle("browser:go", (_e, url) => {

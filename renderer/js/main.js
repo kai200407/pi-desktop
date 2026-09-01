@@ -37,6 +37,7 @@
 	let sidebarModule = null;
 	let conversationModule = null;
 	let browserUIModule = null;
+	let breadcrumbModule = null;
 
 	// --- 布局常量（与 app.js 一致） ------------------------------------------
 	const WIDTH_KEY = 'pi-col-widths';
@@ -66,12 +67,14 @@
 		// 3. 初始化三大模块（注意顺序：browser-ui 最后，因为它需要上报 bounds）
 		try { initSidebar(); } catch (e) { console.error('[main] initSidebar 失败:', e); }
 		try { initConversation(); } catch (e) { console.error('[main] initConversation 失败:', e); }
+		try { initBreadcrumb(); } catch (e) { console.error('[main] initBreadcrumb 失败:', e); }
 		try { initBrowserUI(); } catch (e) { console.error('[main] initBrowserUI 失败:', e); }
 
 		// 4. 绑定顶层事件
 		bindGlobalEvents();
 		bindMenuEvents();
 		bindResizers();
+		bindAttachButton();
 
 		// 5. 应用主题到 document
 		applyTheme();
@@ -220,7 +223,7 @@
 				btnNew: $('btn-new'),
 				sessionCtxMenu: $('session-ctx-menu'),
 				cwdPop: $('cwd-pop'),
-				btnAddProject: $('btn-add-project'),
+				// btnAddProject 已移除（工作区切换入口已迁移到面包屑导航）
 				branchPop: $('branch-pop'),
 				browserPane: browserPane,
 			},
@@ -243,6 +246,40 @@
 		// 避免 agent_end / session_cleared 等事件各自触发一次列表 IPC + 全量重建。
 		conversationModule.onRefreshSessions = () => sidebarModule?.scheduleRefreshSessions();
 		conversationModule.init();
+	}
+
+	// 初始化面包屑导航模块（Codex风格顶部工作区指示器）
+	function initBreadcrumb() {
+		console.log('[main] initBreadcrumb()');
+		if (typeof window.Breadcrumb !== 'function') {
+			console.error('[main] window.Breadcrumb 未加载（js/breadcrumb.js 缺失或报错）');
+			return;
+		}
+		breadcrumbModule = new window.Breadcrumb({
+			state: state,
+			ipc: ipc,
+			hooks: {
+				showNotice: (msg) => conversationModule?.showNotice(msg),
+				refreshSessions: () => sidebarModule?.scheduleRefreshSessions(),
+				getSessionGroups: () => state.sessionGroups || [],
+				exportConversation: () => {
+					// 导出当前会话为 markdown
+					const sid = state.activeSessionId || state.currentSessionId;
+					if (!sid) {
+						conversationModule?.showNotice('当前没有可导出的会话');
+						return;
+					}
+					ipc.call('exportSession', sid, 'markdown').then(res => {
+						if (res?.ok) conversationModule?.showNotice('已导出: ' + res.filePath);
+						else conversationModule?.showNotice('导出失败: ' + (res?.error || '未知错误'));
+					});
+				},
+				closePopovers: closeAllPopovers,
+				positionPopoverXY: positionPopoverXY,
+			}
+		});
+		window.__breadcrumb = breadcrumbModule;
+		console.log('[main] Breadcrumb 初始化完成');
 	}
 
 	// 初始化右栏浏览器模块。
@@ -298,9 +335,9 @@
 		// 按下本身不触发关闭（closest 命中菜单自身），按下菜外即关。
 		document.addEventListener('mousedown', (e) => {
 			if (e.target.closest && e.target.closest(
-				'#model-pop, #thinking-pop, #model-btn, #thinking-btn, #cwd-pop, #nav-more, #btn-add-project, ' +
+				'#model-pop, #thinking-pop, #model-btn, #thinking-btn, #cwd-pop, #nav-more, ' +
 				'#session-ctx-menu, #download-pop, #more-pop, #btn-download, #btn-more, #branch-pop, .branch-badge, ' +
-				'#project-ctx-menu'
+				'#project-ctx-menu, #workspace-menu, #bc-workspace-btn, #bc-more-btn, .workspace-editor-modal'
 			)) return;
 			closeAllPopovers();
 		});
@@ -368,6 +405,34 @@
 					break;
 			}
 		});
+	}
+
+	// --- 附件按钮 -----------------------------------------------------------
+	function bindAttachButton() {
+		const btnAttach = document.getElementById('btn-attach');
+		if (!btnAttach) return;
+		btnAttach.addEventListener('click', async () => {
+			console.log('[main] 附件按钮点击');
+			try {
+				const result = await ipc.call('selectFile');
+				if (result?.ok && result.filePath) {
+					console.log('[main] 选择文件:', result.filePath);
+					// 将文件路径插入输入框（用户可继续编辑或发送）
+					const input = document.getElementById('input');
+					if (input) {
+						const cur = input.value;
+						const prefix = cur ? cur + '\n' : '';
+						input.value = prefix + '请分析这个文件: ' + result.filePath;
+						input.focus();
+						// 触发 input 事件以更新发送按钮状态
+						input.dispatchEvent(new Event('input', { bubbles: true }));
+					}
+				}
+			} catch (err) {
+				console.error('[main] 附件选择失败:', err);
+			}
+		});
+		console.log('[main] 附件按钮已绑定 (#btn-attach)');
 	}
 
 	// --- 折叠按钮 -----------------------------------------------------------

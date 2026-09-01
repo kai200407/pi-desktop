@@ -57,7 +57,7 @@
         <!-- 已移除：临时聊天 / 已安排 / 插件 / 更多（均无用或占位未实现）
              原 #btn-ephemeral / #nav-scheduled / #nav-plugins / #nav-more 四个导航行。
              注：macOS 原生菜单「新建临时聊天 ⇧⌘N」仍保留，走 Sidebar.newEphemeral()；
-             工作区切换入口保留在项目分组标题行的「+」按钮（#btn-add-project）。 -->
+             工作区切换入口已迁移到面包屑导航（#bc-workspace-btn）。 -->
       </nav>
 
       <!-- 项目分组会话列表 -->
@@ -81,11 +81,7 @@
 
         <div class="sb-group-head">
           <span>项目</span>
-          <button id="btn-add-project" class="icon-btn sb-ico xs" title="选择其他工作区">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <line x1="8" y1="3.5" x2="8" y2="12.5" /><line x1="3.5" y1="8" x2="12.5" y2="8" />
-            </svg>
-          </button>
+          <!-- 已移除：btn-add-project（工作区切换已移到面包屑导航） -->
         </div>
         <!-- 工作区列表滚动容器：占据剩余空间，可垂直滚动 -->
         <div class="projects-scroll-container">
@@ -135,22 +131,43 @@
          #center 带 .thread-empty 时：消息流隐藏，输入卡片整体垂直居中（仿 Codex 空状态）；
          有消息后 app.js 摘掉该 class，卡片落回底部。 -->
     <section id="center" class="thread-empty">
-      <!-- 中栏顶部工具栏：工作区选择器 + 新对话按钮 -->
-      <div id="conversation-toolbar" class="conversation-toolbar">
-        <div class="workspace-selector">
-          <button id="workspace-btn" class="workspace-btn" type="button" title="选择工作区">
-            <span class="ws-label">工作区:</span>
-            <span id="ws-name" class="ws-name">加载中...</span>
-            <svg class="ws-arrow" viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,6.5 8,10.5 12,6.5" /></svg>
+      <!-- 面包屑导航（Codex风格）：紧凑显示当前工作区 + 会话统计 -->
+      <div class="conversation-breadcrumb" id="conversation-breadcrumb">
+        <!-- 第一行：工作区名称 + 操作按钮 -->
+        <div class="bc-main">
+          <span class="bc-icon">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M1.8 4.2h4l1.4 1.6h7v6.4a1.2 1.2 0 0 1-1.2 1.2H3a1.2 1.2 0 0 1-1.2-1.2z"/>
+            </svg>
+          </span>
+          <button class="bc-workspace" id="bc-workspace-btn" type="button" title="点击切换工作区">
+            <span id="bc-workspace-name">pi-desktop</span>
+            <svg class="bc-arrow" viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,6.5 8,10.5 12,6.5" /></svg>
           </button>
+          <div class="bc-actions">
+            <button class="icon-btn bc-btn" id="bc-more-btn" type="button" title="更多选项">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="8" cy="4" r="1.2" />
+                <circle cx="8" cy="8" r="1.2" />
+                <circle cx="8" cy="12" r="1.2" />
+              </svg>
+            </button>
+            <button class="icon-btn bc-btn" id="bc-share-btn" type="button" title="分享对话">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.5v8M8 2.5L5.5 5M8 2.5L10.5 5" />
+                <path d="M3.5 8.5v4a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-4" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <button id="btn-new-chat-toolbar" class="btn-new-chat" type="button" title="在当前工作区新建对话">
-          <svg viewBox="0 0 16 16" aria-hidden="true" style="width:12px;height:12px;">
-            <line x1="8" y1="3" x2="8" y2="13" />
-            <line x1="3" y1="8" x2="13" y2="8" />
-          </svg>
-          <span>新对话</span>
-        </button>
+        <!-- 第二行：详细信息 -->
+        <div class="bc-details">
+          <span class="bc-stat" id="bc-session-count">0 个会话</span>
+          <span class="bc-sep">·</span>
+          <span class="bc-path" id="bc-workspace-path" title="">~/...</span>
+          <span class="bc-sep">·</span>
+          <button class="bc-edit" id="bc-edit-btn" type="button">编辑</button>
+        </div>
       </div>
 
       <div id="thread" class="thread">
@@ -206,7 +223,7 @@
 
           <!-- 卡片内底部工具行 -->
           <div class="composer-toolbar">
-            <button id="btn-attach" class="round-btn" type="button" title="添加附件（占位，暂未实现）">
+            <button id="btn-attach" class="round-btn" type="button" title="上传附件">
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <line x1="8" y1="3.8" x2="8" y2="12.2" />
                 <line x1="3.8" y1="8" x2="12.2" y2="8" />
@@ -453,6 +470,7 @@
   <script src="js/ipc-client.js"></script>
   <script src="js/sidebar.js"></script>
   <script src="js/conversation.js"></script>
+  <script src="js/breadcrumb.js"></script>
   <script src="js/browser-ui.js"></script>
   <script src="js/main.js"></script>
 </body>

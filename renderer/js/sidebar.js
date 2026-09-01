@@ -353,7 +353,7 @@
     if (this.els.cwdPop) this.els.cwdPop.classList.add('hidden');
     if (this.els.sessionCtxMenu) this.els.sessionCtxMenu.classList.add('hidden');
     if (this.els.branchPop) this.els.branchPop.classList.add('hidden');
-    if (this.els.btnAddProject) this.els.btnAddProject.classList.remove('open');
+    // btnAddProject 已移除（工作区切换入口已迁移到面包屑导航）
     // 项目分组右键菜单（动态创建在 body 上）
     this.closeProjectCtxMenu();
   };
@@ -1402,11 +1402,11 @@
       self.newSession();
     });
 
-    // 工作区弹层触发按钮（项目区「+」）
-    if (els.btnAddProject) els.btnAddProject.addEventListener('click', function (e) {
-      e.stopPropagation();
-      self.toggleWorkspacePicker(els.btnAddProject);
-    });
+    // 工作区弹层触发按钮（项目区「+」）——已移除，工作区切换已迁移到面包屑导航
+    // if (els.btnAddProject) els.btnAddProject.addEventListener('click', function (e) {
+    //   e.stopPropagation();
+    //   self.toggleWorkspacePicker(els.btnAddProject);
+    // });
 
     // Alt+←/→ 上一个/下一个聊天（Codex 视图菜单同款）
     document.addEventListener('keydown', function (e) {
