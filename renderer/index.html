@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+  <title>pi</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ============ 顶栏：Codex 没有独立标题栏，红绿灯直接浮在左栏顶部 ============
+       #titlebar 整体 display:none（见 styles.css），但保留 #session-title：
+       app.js 会写当前会话名。
+       模型 / 思考等级选择器（#model-btn / #thinking-btn）已搬到中栏输入卡片底部。 -->
+  <header id="titlebar">
+    <span id="session-title">新对话</span>
+  </header>
+
+  <!-- ============ 主体三栏 grid: auto minmax(0,1fr) auto ============ -->
+  <main id="shell">
+    <!-- ---------- 左栏 260px ---------- -->
+    <aside id="sidebar">
+      <!-- 第一行：红绿灯留白后的工具行（本行可拖拽窗口） -->
+      <div class="sb-tools">
+        <div class="traffic-light-space"></div>
+        <button id="btn-nav-back" class="icon-btn sb-ico no-drag" title="后退">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="10,3 5,8 10,13" /></svg>
+        </button>
+        <button id="btn-nav-forward" class="icon-btn sb-ico no-drag" title="前进">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="6,3 11,8 6,13" /></svg>
+        </button>
+      </div>
+
+      <!-- 第二行：品牌 pi ⌄ + 搜索 / 通知 -->
+      <div class="sb-brand">
+        <button id="btn-brand" class="brand-btn" type="button" title="pi">
+          <span class="brand-name">pi</span>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,6.5 8,10.5 12,6.5" /></svg>
+        </button>
+        <div class="sb-brand-actions">
+          <button id="btn-search" class="icon-btn sb-ico" title="搜索会话">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" /><line x1="10.5" y1="10.5" x2="14" y2="14" />
+            </svg>
+          </button>
+          <button id="btn-notify" class="icon-btn sb-ico" title="通知（待实现）">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 7a4 4 0 0 1 8 0c0 3 1 4 1 4H3s1-1 1-4Z" />
+              <path d="M6.5 13a1.6 1.6 0 0 0 3 0" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 导航区：图标 + 文字行 -->
+      <nav class="sb-nav" aria-label="主导航">
+        <button id="btn-new" class="nav-row" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M11 2.6l2.4 2.4-7.2 7.2-3 .6.6-3z" />
+          </svg>
+          <span>新对话</span>
+        </button>
+        <!-- 临时聊天：会话不落盘，关掉即焚（Codex 同名功能）。实现：主进程用
+             SessionManager.inMemory() 建 runtime，后续 newSession 自动保持不落盘 -->
+        <button id="btn-ephemeral" class="nav-row" type="button" title="临时聊天（不保存到会话列表）">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M9.5 1.8h4.7v4.7" />
+            <path d="M14.2 1.8L7.4 8.6" />
+            <path d="M12.6 9.4v3.4a1.6 1.6 0 0 1-1.6 1.6H3.4a1.6 1.6 0 0 1-1.6-1.6V5.2a1.6 1.6 0 0 1 1.6-1.6h3.4" />
+          </svg>
+          <span>临时聊天</span>
+        </button>
+        <button id="nav-scheduled" class="nav-row" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.8" /><polyline points="8,4.6 8,8 10.6,9.4" />
+          </svg>
+          <span>已安排</span>
+        </button>
+        <button id="nav-plugins" class="nav-row" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.8" /><circle cx="8" cy="8" r="2.2" />
+          </svg>
+          <span>插件</span>
+        </button>
+        <button id="nav-more" class="nav-row" type="button" title="更多（切换工作区）">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="3.4" cy="8" r=".9" /><circle cx="8" cy="8" r=".9" /><circle cx="12.6" cy="8" r=".9" />
+          </svg>
+          <span>更多</span>
+        </button>
+      </nav>
+
+      <!-- 项目分组会话列表 -->
+      <div class="sb-scroll">
+        <!-- 会话搜索行：默认隐藏，点品牌行的放大镜展开（见 app.js setSearchOpen） -->
+        <div id="search-row" class="search-row hidden">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5" /><line x1="10.5" y1="10.5" x2="14" y2="14" />
+          </svg>
+          <input id="session-search" class="session-search" type="text"
+                 placeholder="搜索会话…" spellcheck="false" autocomplete="off" />
+          <button id="btn-search-clear" class="icon-btn sb-ico xs" type="button" title="收起搜索（Esc）">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <line x1="4.5" y1="4.5" x2="11.5" y2="11.5" />
+              <line x1="11.5" y1="4.5" x2="4.5" y2="11.5" />
+            </svg>
+          </button>
+        </div>
+        <!-- 命中统计：仅搜索态可见 -->
+        <div id="search-stat" class="search-stat hidden"></div>
+
+        <div class="sb-group-head">
+          <span>项目</span>
+          <button id="btn-add-project" class="icon-btn sb-ico xs" title="选择其他工作区">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <line x1="8" y1="3.5" x2="8" y2="12.5" /><line x1="3.5" y1="8" x2="12.5" y2="8" />
+            </svg>
+          </button>
+        </div>
+        <nav id="session-list" class="session-list" aria-label="项目与会话列表"></nav>
+      </div>
+
+      <!-- 底部用户行：头像 + 名字 + 主题 / 浏览器 / 帮助 -->
+      <div class="sb-user">
+        <div class="avatar" aria-hidden="true">本</div>
+        <span class="user-name" title="本地用户（pi 运行在你自己的机器上）">本地用户</span>
+        <button id="btn-theme" class="icon-btn sb-ico" title="切换主题">
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="icon-sun">
+            <circle cx="8" cy="8" r="3.2" />
+            <line x1="8" y1="1" x2="8" y2="2.6" />
+            <line x1="8" y1="13.4" x2="8" y2="15" />
+            <line x1="1" y1="8" x2="2.6" y2="8" />
+            <line x1="13.4" y1="8" x2="15" y2="8" />
+            <line x1="3.3" y1="3.3" x2="4.4" y2="4.4" />
+            <line x1="11.6" y1="11.6" x2="12.7" y2="12.7" />
+            <line x1="12.7" y1="3.3" x2="11.6" y2="4.4" />
+            <line x1="4.4" y1="11.6" x2="3.3" y2="12.7" />
+          </svg>
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="icon-moon">
+            <path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" />
+          </svg>
+        </button>
+        <button id="btn-browser" class="icon-btn sb-ico" title="切换浏览器面板">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+            <line x1="1.5" y1="6" x2="14.5" y2="6" />
+          </svg>
+        </button>
+        <button id="btn-help" class="icon-btn sb-ico" title="帮助（待实现）">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.8" />
+            <path d="M6.4 6.2a1.7 1.7 0 1 1 2.4 1.6c-.5.3-.8.6-.8 1.2" />
+            <circle cx="8" cy="11.4" r=".7" />
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- ---------- 中栏（弹性）----------
+         #center 带 .thread-empty 时：消息流隐藏，输入卡片整体垂直居中（仿 Codex 空状态）；
+         有消息后 app.js 摘掉该 class，卡片落回底部。 -->
+    <section id="center" class="thread-empty">
+      <div id="thread" class="thread">
+        <!-- 置顶摘要横条（P1-8）：compaction 事件后显示「⚡ 上下文已压缩 · 点击展开」，
+             展开显示摘要全文，展开态存 localStorage。默认 hidden。 -->
+        <div id="compact-bar" class="compact-bar hidden">
+          <button id="compact-bar-head" class="compact-bar-head" type="button">
+            <svg class="caret" viewBox="0 0 16 16" aria-hidden="true"><polyline points="6,3 11,8 6,13" /></svg>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 2 4 9h3l-1 5 5-7H8z" /></svg>
+            <span id="compact-bar-label">上下文已压缩</span>
+            <span id="compact-bar-time" class="compact-bar-time"></span>
+          </button>
+          <div id="compact-bar-body" class="compact-bar-body"></div>
+        </div>
+        <!-- 对话内查找条（⌘F 唤出，Codex 视图菜单「查找」对应物） -->
+        <div id="find-bar" class="find-bar hidden">
+          <input id="find-input" type="text" placeholder="在对话中查找…" />
+          <span id="find-count" class="find-count"></span>
+          <button id="find-prev" class="icon-btn" type="button" title="上一个 (⇧⏎)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,10 8,6 12,10" /></svg>
+          </button>
+          <button id="find-close" class="icon-btn" type="button" title="关闭 (Esc)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><line x1="4" y1="4" x2="12" y2="12" /><line x1="12" y1="4" x2="4" y2="12" /></svg>
+          </button>
+        </div>
+        <div class="thread-inner">
+          <!-- 消息将插入此处 -->
+          <div id="messages" class="messages"></div>
+        </div>
+      </div>
+
+      <!-- 输入区：空状态标题 + 输入卡片 + 卡片下方上下文行 -->
+      <div class="composer-wrap">
+        <!-- 空状态标题：有消息后由 markUsed() 打 .hidden -->
+        <div id="empty-state" class="empty-state">
+          <h1>我们要做什么？</h1>
+        </div>
+
+        <div class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="使用 pi" spellcheck="false"></textarea>
+
+          <!-- 卡片内底部工具行 -->
+          <div class="composer-toolbar">
+            <button id="btn-attach" class="round-btn" type="button" title="添加附件（占位，暂未实现）">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <line x1="8" y1="3.8" x2="8" y2="12.2" />
+                <line x1="3.8" y1="8" x2="12.2" y2="8" />
+              </svg>
+            </button>
+
+            <!-- pi 实际持有 bash / 文件写入权限，这里如实标注 -->
+            <span id="access-badge" class="access-badge" title="pi 可以执行命令、读写工作区文件">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.6 14.2 13H1.8Z" />
+                <line x1="8" y1="6.3" x2="8" y2="9.3" />
+                <line x1="8" y1="11" x2="8" y2="11.2" />
+              </svg>
+              <span>完全访问</span>
+            </span>
+
+            <span class="toolbar-spacer"></span>
+
+            <button id="btn-compact" class="compact-btn" title="压缩上下文">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <polyline points="4.5,3 8,6 11.5,3" />
+                <line x1="2.5" y1="8" x2="13.5" y2="8" />
+                <polyline points="4.5,13 8,10 11.5,13" />
+              </svg>
+            </button>
+            <button id="thinking-btn" class="pill-btn" type="button" title="思考等级">
+              <span id="thinking-label" class="pill-label">思考</span>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,6.5 8,10.5 12,6.5" /></svg>
+            </button>
+            <button id="model-btn" class="pill-btn" type="button" title="选择模型">
+              <span id="model-label" class="pill-label">模型</span>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,6.5 8,10.5 12,6.5" /></svg>
+            </button>
+            <button id="btn-send" class="send-btn" title="发送 (Enter)">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <line x1="8" y1="12.6" x2="8" y2="3.8" />
+                <polyline points="4.2,7.4 8,3.6 11.8,7.4" />
+              </svg>
+            </button>
+            <button id="btn-stop" class="stop-btn hidden" title="停止">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="4.5" y="4.5" width="7" height="7" rx="1.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 卡片下方上下文行：工作区名 + 插件占位 + 浏览器开关 -->
+        <div id="context-bar" class="context-bar">
+          <span class="ctx-item" title="当前工作区">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2 4.2h4.2l1.3 1.6H14v6.6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z" />
+            </svg>
+            <span id="ctx-cwd" class="ctx-text">—</span>
+          </span>
+          <button id="btn-plugins" class="ctx-item ctx-btn" type="button" title="插件（占位，暂未实现）">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2.4" y="2.4" width="4.8" height="4.8" rx="1" />
+              <rect x="8.8" y="2.4" width="4.8" height="4.8" rx="1" />
+              <rect x="2.4" y="8.8" width="4.8" height="4.8" rx="1" />
+              <rect x="8.8" y="8.8" width="4.8" height="4.8" rx="1" />
+            </svg>
+            <span class="ctx-text">插件</span>
+          </button>
+          <span class="toolbar-spacer"></span>
+          <button id="btn-toggle-browser-inline" class="icon-btn sm" type="button" title="切换浏览器面板">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+              <line x1="10" y1="2.5" x2="10" y2="13.5" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- 示例提示词：仅空状态可见 -->
+        <div class="suggestions" id="suggestions"></div>
+      </div>
+    </section>
+
+    <!-- ---------- 右栏 480px（可折叠） ---------- -->
+    <aside id="browser-pane">
+      <!-- 标签页栏：纯前端 UI 占位。主进程目前只有一个 WebContentsView，
+           真正的多标签需要主进程维护多个 view 并切换可见性，这里不做假多开。 -->
+      <div id="tab-bar" class="tab-bar">
+        <!-- 标签由 renderTabs() 按主进程推来的 browser_tabs 事件动态生成，
+             每个标签对应一个真实的 WebContentsView（见 main.js 的 browserTabs） -->
+        <div id="tab-strip" class="tab-strip"></div>
+        <button id="btn-tab-new" class="icon-btn sm" type="button" title="新建标签页">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <line x1="8" y1="3.8" x2="8" y2="12.2" />
+            <line x1="3.8" y1="8" x2="12.2" y2="8" />
+          </svg>
+        </button>
+        <span class="toolbar-spacer"></span>
+      </div>
+
+      <div class="pane-toolbar">
+        <button id="btn-back" class="icon-btn sm" title="后退">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="10,3 5,8 10,13" /></svg>
+        </button>
+        <button id="btn-forward" class="icon-btn sm" title="前进">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="6,3 11,8 6,13" /></svg>
+        </button>
+        <button id="btn-reload" class="icon-btn sm" title="刷新">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M13 8a5 5 0 1 1-1.6-3.7" />
+            <polyline points="13,2 13,5 10,5" />
+          </svg>
+        </button>
+        <button id="btn-home" class="icon-btn sm" title="主页">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M3 7.5 8 3l5 4.5" />
+            <path d="M4.5 7v5.5h7V7" />
+          </svg>
+        </button>
+        <svg id="url-lock" class="url-lock hidden" viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+          <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+        </svg>
+        <input id="url-input" class="url-input" type="text" placeholder="输入网址…"
+               spellcheck="false" autocomplete="off" />
+        <!-- ☆ 收藏（对齐 Codex 地址栏）：当前页进/出收藏夹，存 localStorage -->
+        <button id="btn-favorite" class="icon-btn sm" type="button" title="收藏此页">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 2.4l1.7 3.5 3.8.6-2.8 2.7.7 3.8L8 11.2l-3.4 1.8.7-3.8-2.8-2.7 3.8-.6z" />
+          </svg>
+        </button>
+        <button id="btn-open-external" class="icon-btn sm" title="在外部浏览器打开（占位，暂未实现）">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <polyline points="9,2.8 13.2,2.8 13.2,7" />
+            <line x1="13.2" y1="2.8" x2="7.6" y2="8.4" />
+            <path d="M11.6 9.6v2.6a1 1 0 0 1-1 1H3.8a1 1 0 0 1-1-1V5.4a1 1 0 0 1 1-1h2.6" />
+          </svg>
+        </button>
+        <button id="btn-download" class="icon-btn sm" title="下载（占位，暂未实现）">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <line x1="8" y1="2.6" x2="8" y2="10" />
+            <polyline points="5,7.2 8,10.4 11,7.2" />
+            <line x1="3" y1="13.2" x2="13" y2="13.2" />
+          </svg>
+        </button>
+        <button id="btn-devtools" class="icon-btn sm" title="开发者工具">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <polyline points="5.5,4 2,8 5.5,12" />
+            <polyline points="10.5,4 14,8 10.5,12" />
+          </svg>
+        </button>
+        <button id="btn-import" class="icon-btn sm" type="button" title="从 Chrome 导入登录态">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 2.2 13.8 5v6L8 13.8 2.2 11V5Z" />
+            <path d="M8 2.2v5.8m0 0 5.8-3M8 8 2.2 5" />
+          </svg>
+        </button>
+        <button id="btn-more" class="icon-btn sm" title="更多（占位，暂未实现）">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="3.6" r=".9" />
+            <circle cx="8" cy="8" r=".9" />
+            <circle cx="8" cy="12.4" r=".9" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- 内容区：原生 view 由主进程贴在 #browser-slot 的 rect 上。
+           #browser-empty 是普通 DOM，会被原生 view 完全遮住，所以展示空状态时
+           app.js 会调 browserToggle(false) 把 view 缩到 0（见 syncBrowserView）。
+           两者用绝对定位互相重叠，#browser-slot 的尺寸恒定，不影响 reportBounds。 -->
+      <div class="browser-body">
+        <!-- 主进程会把真实 WebContentsView 贴到这个空 div 上 -->
+        <div id="browser-slot"></div>
+        <div id="browser-empty" class="browser-empty hidden">
+          <div class="be-title">新标签页</div>
+          <div class="be-grid" id="be-grid"></div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- 左栏的「折叠/展开」永恒按钮（Codex 式）。
+       原先按钮在 #sidebar 顶部：侧栏一折叠按钮跟着消失，把手又出现在中栏 ——
+       按钮位置随栏开关跳动。现在按钮恒挂 #shell 左上（红绿灯右侧），永远不动，
+       点击即切换左栏开/关。图标用侧栏面板图形，方向不变（Codex 也不换图标）。 -->
+  <button id="btn-show-sidebar" class="icon-btn pane-toggle-btn left" type="button" title="切换侧边栏">
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+      <line x1="6" y1="2.5" x2="6" y2="13.5" />
+    </svg>
+  </button>
+
+  <!-- 右栏的「折叠/展开」永恒按钮 —— 与左侧对称，恒在 #shell 右上角，
+       点击切换右栏开/关，位置永不随栏状态变化。 -->
+  <button id="btn-show-browser" class="icon-btn pane-toggle-btn right" type="button" title="切换浏览器面板">
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+      <line x1="10.5" y1="2.5" x2="10.5" y2="13.5" />
+    </svg>
+  </button>
+
+  <!-- ---------- 栏宽拖拽手柄 ----------
+         绝对定位在两条分界线上（#shell 是 position:relative），
+         position:absolute 让它们【不是 grid item】，不会破坏三栏 grid 轨道。
+         必须放在 #sidebar / #browser-pane 之后：折叠时用兄弟选择器隐藏
+         （#sidebar.collapsed ~ #resize-left）。拖拽逻辑见 app.js 「栏宽拖拽」。 -->
+    <div id="resize-left" class="col-resizer" title="拖拽调整左栏宽度（双击重置）"></div>
+    <div id="resize-right" class="col-resizer" title="拖拽调整右栏宽度（双击重置）"></div>
+  </main>
+
+  <!-- ============ 弹层：模型选择 / 思考等级 / 工作区
+       由 app.js 绝对定位；模型与思考等级锚在输入卡片底部、向上展开，
+       且右边界不越过右栏浏览器面板左缘（原生 view 永远盖在 DOM 之上） ============ -->
+  <!-- 会话右键菜单 / 下载弹层 / 收藏弹层：复用 .popover 样式，由 app.js 绝对定位 -->
+  <div id="session-ctx-menu" class="popover session-ctx-menu hidden"></div>
+  <div id="download-pop" class="popover download-pop hidden"></div>
+  <div id="more-pop" class="popover more-pop hidden"></div>
+  <!-- 会话分支弹层（P1-7）：点会话行的 ⑂N 徽标打开，列出 branch_summary 摘要 -->
+  <div id="branch-pop" class="popover branch-pop hidden"></div>
+
+  <div id="model-pop" class="popover model-pop hidden">
+    <div class="model-search-row">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><line x1="10.5" y1="10.5" x2="14" y2="14" /></svg>
+      <input id="model-search" class="model-search" type="text" placeholder="搜索模型…" spellcheck="false" autocomplete="off" />
+    </div>
+    <div id="model-list" class="model-list"></div>
+  </div>
+
+  <div id="thinking-pop" class="popover thinking-pop hidden"></div>
+  <div id="cwd-pop" class="popover cwd-pop hidden"></div>
+
+  <!-- 「从 Chrome 导入登录态」居中模态框。注意：右栏原生 WebContentsView 永远盖
+       在 DOM 之上，所以模态框打开前 app.js 会先 browserToggle(false) 把 view 缩
+       到 0，关闭时再恢复（见 app.js「导入登录态」一节）。 -->
+  <div id="import-overlay" class="import-overlay hidden">
+    <div id="import-modal" class="import-modal" role="dialog" aria-modal="true"
+         aria-labelledby="import-title">
+      <div class="im-head">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 2.2 13.8 5v6L8 13.8 2.2 11V5Z" />
+          <path d="M8 2.2v5.8m0 0 5.8-3M8 8 2.2 5" />
+        </svg>
+        <span id="import-title" class="im-title">从 Chrome 导入</span>
+      </div>
+      <div class="im-body">
+        <p>把你在 Chrome 里已登录的 Cookie 导入内置浏览器，让它直接继承登录态，
+        不再需要登录（对 Google 尤其有用）。</p>
+        <p class="im-note">· 只导入 Google 相关域名，不碰其他网站的 Cookie<br />
+           · 导入前请<b>完全退出 Chrome</b>（⌘Q），否则 Cookie 库被占用读不了<br />
+           · 首次导入 macOS 会弹钥匙串授权窗口，请点「始终允许」</p>
+        <div id="import-result" class="im-result hidden"></div>
+      </div>
+      <div class="im-actions">
+        <button id="import-cancel" class="im-btn" type="button">取消</button>
+        <button id="import-confirm" class="im-btn primary" type="button">开始导入</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

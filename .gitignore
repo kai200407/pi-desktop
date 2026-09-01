@@ -1,0 +1,14 @@
+node_modules/
+release/
+dist/
+
+# macOS
+.DS_Store
+
+# 用户数据（不上传配置和会话）
+*.log
+
+# Electron 调试
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,61 @@
+{
+  "name": "pi-desktop",
+  "version": "0.1.0",
+  "description": "Codex 风格三栏桌面端，引擎用 pi",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "allowScripts": {
+    "electron": true,
+    "protobufjs": true,
+    "@google/genai": true,
+    "electron-builder": true,
+    "app-builder-bin": true,
+    "dmg-builder": true
+  },
+  "devDependencies": {
+    "electron": "^38.8.6",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4"
+  },
+  "build": {
+    "appId": "dev.local.pi-desktop",
+    "productName": "pi",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "node_modules/**/*",
+      "!node_modules/electron/dist/**/*"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["arm64"]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "darkModeSupport": true,
+      "identity": null,
+      "extendInfo": {
+        "NSHumanReadableCopyright": "",
+        "LSMinimumSystemVersion": "11.0",
+        "NSBluetoothAlwaysUsageDescription": "用于 FIDO 安全密钥登录（如 YubiKey、手机验证）",
+        "NSBluetoothPeripheralUsageDescription": "用于 FIDO 安全密钥登录",
+        "NSCameraUsageDescription": "网页可能请求摄像头（默认拒绝）",
+        "NSMicrophoneUsageDescription": "网页可能请求麦克风（默认拒绝）"
+      }
+    }
+  }
+}
