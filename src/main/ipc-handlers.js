@@ -65,6 +65,40 @@ function registerIpcHandlers(deps) {
 	// deps.win 可能是函数（惰性取当前窗口，防窗口重建后持有失效引用），统一解析
 	const getWin = () => (typeof win === "function" ? win() : win);
 
+	// ===== 获取可用 skills =====
+	// 从 pi runtime 的 resourceLoader 获取当前工作区已加载的 skills。
+	// 工作区切换后 skills 会变，渲染层通过 IPC 动态拉取。
+	ipcMain.handle("pi:getAvailableSkills", async () => {
+		console.log('[IPC] getAvailableSkills');
+		try {
+			const p = pi();
+			if (!p || !p.runtime || !p.runtime.session) {
+				console.log('[IPC] pi 未初始化，返回空 skills');
+				return { ok: true, skills: [] };
+			}
+			const sess = p.runtime.session;
+			// resourceLoader 挂在 session 上（见 agent-session.d.ts）
+			const loader = sess.resourceLoader;
+			if (!loader || typeof loader.getSkills !== 'function') {
+				console.log('[IPC] resourceLoader 不可用');
+				return { ok: true, skills: [] };
+			}
+			const result = loader.getSkills();
+			const skills = (result.skills || []).map(s => ({
+				name: s.name,
+				description: s.description || '',
+				filePath: s.filePath || '',
+				baseDir: s.baseDir || '',
+				disableModelInvocation: !!s.disableModelInvocation,
+			}));
+			console.log('[IPC] getAvailableSkills 成功:', skills.length, '个 skills');
+			return { ok: true, skills };
+		} catch (err) {
+			console.error('[IPC] getAvailableSkills 失败:', err);
+			return { ok: false, error: err.message, skills: [] };
+		}
+	});
+
 	// ===== pi 操作 =====
 	// ==== 对话 ====
 	ipcMain.handle("pi:send", async (_e, text) => {
@@ -352,8 +386,9 @@ function registerIpcHandlers(deps) {
 			await ensurePi();
 			// 会话可能属于另一个项目（左栅能看到所有项目）。
 			// 先把工作区切到那个项目，否则工具会在错的目录下执行。
+			// 【分组稳定性】点击会话切工作区传 updateRecent:false，避免分组顺序跳动。
 			const owner = sessionFileOwner(file);
-			if (owner && owner !== pi()?.cwd) await switchWorkspace(owner);
+			if (owner && owner !== pi()?.cwd) await switchWorkspace(owner, { updateRecent: false });
 			const { runtime } = await ensurePi();
 			await runtime.switchSession(file);
 			bindSession();
@@ -479,8 +514,9 @@ function registerIpcHandlers(deps) {
 			if (!file || !branchFromId) return { ok: false, err: "bad arg" };
 			await ensurePi();
 			// 会话可能属于另一个项目：先切工作区（与 pi:switchSession 同款逻辑）
+			// 【分组稳定性】点击会话切工作区传 updateRecent:false，避免分组顺序跳动。
 			const owner = sessionFileOwner(file);
-			if (owner && owner !== pi()?.cwd) await switchWorkspace(owner);
+			if (owner && owner !== pi()?.cwd) await switchWorkspace(owner, { updateRecent: false });
 			const { runtime } = await ensurePi();
 			await runtime.switchSession(file);
 			bindSession();

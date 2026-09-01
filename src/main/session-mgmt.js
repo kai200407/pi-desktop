@@ -213,16 +213,24 @@ class SessionManager {
 	// 缓存 runtime 实例（LRU 上限 3），切回已访问工作区只需 ~50ms 而不是 700-1200ms。
 	// 这里只需解绑当前 session 事件订阅（由 getUnsubscribe 返回的函数完成），
 	// 实际的实例复用/新建/淘汰都由 initPi 内部处理。
-	async switchWorkspace(dir) {
+	//
+	// opts.updateRecent（默认 true）：是否把 dir 提到 recentCwds 首位。
+	// 点击会话切工作区（switchSession/switchToBranch 内部）传 false，
+	// 避免分组顺序随点击跳动；显式切换工作区（setCwd/pickCwd）保持 true。
+	async switchWorkspace(dir, opts = {}) {
 		console.time('[SessionManager] switchWorkspace');
-		console.log('[SessionManager] switchWorkspace:', this.pi?.cwd, '→', dir);
+		console.log('[SessionManager] switchWorkspace:', this.pi?.cwd, '→', dir, 'updateRecent:', opts.updateRecent !== false);
 		const unsub = this.engine.getUnsubscribe?.();
 		if (unsub) { try { unsub(); } catch {} this.engine.setUnsubscribe?.(null); }
 		// 【已移除】this.engine.setPi(null) —— 让实例池接管生命周期
-		const list = (this.loadConf().recentCwds || []).filter((x) => x !== dir);
-		list.unshift(dir);
-		this.saveConf({ recentCwds: list.slice(0, 10) });
-		await this.engine.initPi(dir);
+		if (opts.updateRecent !== false) {
+			const list = (this.loadConf().recentCwds || []).filter((x) => x !== dir);
+			list.unshift(dir);
+			this.saveConf({ recentCwds: list.slice(0, 10) });
+		} else {
+			console.log('[SessionManager] 跳过更新 recentCwds（点击会话不改变分组顺序）');
+		}
+		await this.engine.initPi(dir, { updateRecent: opts.updateRecent !== false });
 		this.send("session_cleared");
 		this.send("recent_cwds", { list: (this.loadConf().recentCwds || []) });
 		console.timeEnd('[SessionManager] switchWorkspace');
@@ -338,8 +346,9 @@ class SessionManager {
 			await this.engine.ensurePi();
 			// 会话可能属于另一个项目（左栅能看到所有项目）。
 			// 先把工作区切到那个项目，否则工具会在错的目录下执行。
+			// 【分组稳定性】点击会话切工作区不传 updateRecent，避免分组顺序跳动。
 			const owner = sessionFileOwner(file);
-			if (owner && owner !== this.pi.cwd) await this.switchWorkspace(owner);
+			if (owner && owner !== this.pi.cwd) await this.switchWorkspace(owner, { updateRecent: false });
 			const { runtime } = await this.engine.ensurePi();
 			await runtime.switchSession(file);
 			this.engine.bindSession();
@@ -423,8 +432,9 @@ class SessionManager {
 			if (!file || !branchFromId) return { ok: false, err: "bad arg" };
 			await this.engine.ensurePi();
 			// 会话可能属于另一个项目：先切工作区（与 switchSession 同款逻辑）
+			// 【分组稳定性】点击会话切工作区不传 updateRecent，避免分组顺序跳动。
 			const owner = sessionFileOwner(file);
-			if (owner && owner !== this.pi.cwd) await this.switchWorkspace(owner);
+			if (owner && owner !== this.pi.cwd) await this.switchWorkspace(owner, { updateRecent: false });
 			const { runtime } = await this.engine.ensurePi();
 			await runtime.switchSession(file);
 			this.engine.bindSession();

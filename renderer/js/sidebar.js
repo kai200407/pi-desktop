@@ -46,6 +46,18 @@
   var ARCHIVED_KEY = 'pi-archived-sessions';     // 归档会话映射 {id: {archivedAt, originalProject}}
   var ARCHIVED_COLLAPSED_KEY = 'pi-archived-group-collapsed';  // 已归档分组折叠态 '1'/'0'
 
+  /* ===== 工作区分组排序 =====
+     3 种模式：
+       alpha  - 纯字母序（固定，不受点击影响）
+       recent - 最近访问（沿用主进程 recentCwds / mtime 顺序，即旧行为）
+       custom - 自定义：固定分组优先（按固定顺序），其余按字母序（默认）
+     点击会话切工作区时主进程不再更新 recentCwds，分组顺序保持稳定。 */
+  var SORT_MODE_ALPHA = 'alpha';
+  var SORT_MODE_RECENT = 'recent';
+  var SORT_MODE_CUSTOM = 'custom';
+  var SORT_MODE_KEY = 'pi-project-sort-mode';
+  var PINNED_PROJECTS_KEY = 'pi-pinned-projects';
+
   // 内联 svg 图标（CSP 不允许内联 style/script，svg 标签本身没问题）
   var ICON_FOLDER =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
@@ -132,6 +144,80 @@
   }
   function setCollapsedProjects(arr) {
     try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(arr)); } catch (e) {}
+  }
+
+  /* ---------------- 工作区排序：模式与固定列表的读写 ---------------- */
+
+  // 读取排序模式（默认 custom：固定 + 字母序）
+  function getSortMode() {
+    try {
+      var mode = localStorage.getItem(SORT_MODE_KEY);
+      if (mode === SORT_MODE_ALPHA || mode === SORT_MODE_RECENT || mode === SORT_MODE_CUSTOM) {
+        return mode;
+      }
+      return SORT_MODE_CUSTOM;
+    } catch (e) { return SORT_MODE_CUSTOM; }
+  }
+  function setSortMode(mode) {
+    try {
+      localStorage.setItem(SORT_MODE_KEY, mode);
+      console.log('[Sidebar] 排序模式已设置:', mode);
+    } catch (e) { console.error('[Sidebar] 设置排序模式失败:', e); }
+  }
+
+  // 读取固定项目列表（数组顺序即显示顺序）
+  function getPinnedProjects() {
+    try {
+      var v = JSON.parse(localStorage.getItem(PINNED_PROJECTS_KEY) || '[]');
+      return Array.isArray(v) ? v : [];
+    } catch (e) { return []; }
+  }
+  function setPinnedProjects(projects) {
+    try {
+      localStorage.setItem(PINNED_PROJECTS_KEY, JSON.stringify(projects || []));
+      console.log('[Sidebar] 固定项目已保存:', (projects || []).length);
+    } catch (e) { console.error('[Sidebar] 保存固定项目失败:', e); }
+  }
+
+  /* 排序工作区分组（纯函数，不修改原数组）。
+     groups: [{project, path, current, sessions}, ...]（主进程已按 current 优先 + mtime 排过）
+     mode:   SORT_MODE_ALPHA / RECENT / CUSTOM
+     pinned: 固定项目 path 数组（仅 CUSTOM 模式使用）
+     返回新数组。 */
+  function sortProjectGroups(groups, mode, pinned) {
+    if (!groups || !groups.length) return groups;
+    var arr = groups.slice();
+    switch (mode) {
+      case SORT_MODE_ALPHA:
+        // 纯字母序（固定，不受点击影响）
+        arr.sort(function (a, b) {
+          return String(a.project || a.path || '').localeCompare(String(b.project || b.path || ''));
+        });
+        return arr;
+
+      case SORT_MODE_RECENT:
+        // 最近访问：沿用主进程排序（current 优先 + 各组最新会话 mtime 倒序），
+        // 点击会话不再更新 recentCwds，所以顺序依然稳定。
+        return arr;
+
+      case SORT_MODE_CUSTOM:
+      default:
+        // 自定义：固定分组优先（按 pinned 数组顺序），其余按字母序
+        var pinnedList = pinned || [];
+        var pinnedGroups = [];
+        var unpinnedGroups = [];
+        arr.forEach(function (g) {
+          if (pinnedList.indexOf(g.path) > -1) pinnedGroups.push(g);
+          else unpinnedGroups.push(g);
+        });
+        pinnedGroups.sort(function (a, b) {
+          return pinnedList.indexOf(a.path) - pinnedList.indexOf(b.path);
+        });
+        unpinnedGroups.sort(function (a, b) {
+          return String(a.project || a.path || '').localeCompare(String(b.project || b.path || ''));
+        });
+        return pinnedGroups.concat(unpinnedGroups);
+    }
   }
 
   /* ================= 会话归档（P1：归档/恢复/持久化/底部「已归档」分组） =================
@@ -260,6 +346,8 @@
     if (this.els.sessionCtxMenu) this.els.sessionCtxMenu.classList.add('hidden');
     if (this.els.branchPop) this.els.branchPop.classList.add('hidden');
     if (this.els.btnAddProject) this.els.btnAddProject.classList.remove('open');
+    // 项目分组右键菜单（动态创建在 body 上）
+    this.closeProjectCtxMenu();
   };
 
   /* ---------------- 会话切换 ---------------- */
@@ -382,7 +470,9 @@
 
   /* 按项目分组渲染：项目行（可切工作区）+ 缩进的会话行。
      数据全部来自 state.sessionGroups 缓存，搜索时只重渲染、不重新打 IPC。
-     搜索态下：命中项全部展开（忽略 6 条上限），整组无命中则隐藏。 */
+     搜索态下：命中项全部展开（忽略 6 条上限），整组无命中则隐藏。
+     【排序】非搜索态按用户配置的排序模式（默认 custom：固定+字母序）重排；
+     搜索态保持主进程返回的原始顺序，避免命中项被重排打乱。 */
   Sidebar.prototype.renderGroups = function () {
     var self = this;
     var q = this._get('searchQuery') || '';
@@ -390,6 +480,14 @@
     var listEl = this.els.sessionList;
     if (!listEl) return;
     listEl.innerHTML = '';
+
+    // ===== 应用排序（仅非搜索态；搜索态保持原始顺序避免混乱） =====
+    if (!q) {
+      var sortMode = getSortMode();
+      var pinnedProjects = getPinnedProjects();
+      groups = sortProjectGroups(groups, sortMode, pinnedProjects);
+      console.log('[Sidebar] renderGroups 排序模式:', sortMode, '固定:', pinnedProjects.length, '分组数:', groups.length);
+    }
 
     // 先算出可见分组与命中数（项目名命中 = 该项目下所有会话都算命中）
     var visible = [];
@@ -430,10 +528,16 @@
       var g = item.g;
       var block = document.createElement('div');
       block.className = 'proj-block';
+      block.setAttribute('data-cwd', g.path);
 
       // 搜索态强制展开（不改动 localStorage 里的偏好），否则读用户折叠偏好
       var collapsed = !q && collapsedArr.indexOf(g.path) >= 0;
       if (collapsed) block.classList.add('collapsed');
+
+      // 固定标识（仅 custom 模式下有视觉区分，其他模式也加上便于样式钩子）
+      var pinnedArr = getPinnedProjects();
+      var isPinned = pinnedArr.indexOf(g.path) > -1;
+      if (isPinned) block.classList.add('pinned');
 
       // 项目行：左侧折叠箭头（点击折叠/展开）+ 文件夹图标 + 项目名（点击切换工作区）
       var row = document.createElement('button');
@@ -459,6 +563,14 @@
         Promise.resolve(self.call('setCwd', g.path)).then(function () {
           self.refreshSessions();
         }).catch(function () {});
+      });
+
+      // ===== 项目行右键菜单：固定/取消固定 + 排序方式切换 =====
+      row.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[Sidebar] 项目行右键:', g.path);
+        self.openProjectCtxMenu(g, e.clientX, e.clientY);
       });
       block.appendChild(row);
 
@@ -561,6 +673,106 @@
     else arr.push(path);
     setCollapsedProjects(arr);
     this.renderGroups();
+  };
+
+  /* ---------------- 工作区分组右键菜单（固定/排序） ---------------- */
+
+  /* 打开项目分组右键菜单：固定/取消固定 + 排序方式切换。
+     与会话右键菜单（#session-ctx-menu）不同，这个菜单是动态创建挂在 body 上的，
+     关闭时直接移除 DOM，不占用 index.html 里的固定元素。 */
+  Sidebar.prototype.openProjectCtxMenu = function (g, x, y) {
+    var self = this;
+    this.closePopovers();
+
+    // 已存在则先移除（防重复）
+    var old = document.getElementById('project-ctx-menu');
+    if (old) old.remove();
+
+    var menu = document.createElement('div');
+    menu.id = 'project-ctx-menu';
+    // 不用 .popover 基类（其 overflow:hidden 会裁掉内容且背景不透明），
+    // 复用 .session-ctx-menu 的浮层风格 + .project-ctx-menu 的分组特有样式。
+    menu.className = 'session-ctx-menu project-ctx-menu';
+    // 初始定位（先显示再量尺寸，positionPopoverXY 会夹紧到可视区内）
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    menu.style.position = 'fixed';
+    menu.style.zIndex = '1000';
+
+    var pinned = getPinnedProjects();
+    var isPinned = pinned.indexOf(g.path) > -1;
+    var sortMode = getSortMode();
+
+    // ===== 固定/取消固定 =====
+    var pinItem = document.createElement('button');
+    pinItem.type = 'button';
+    pinItem.className = 'ctx-item-btn';
+    pinItem.textContent = isPinned ? '取消固定' : '固定到顶部';
+    pinItem.addEventListener('click', function () {
+      var arr = getPinnedProjects();
+      var idx = arr.indexOf(g.path);
+      if (idx > -1) {
+        arr.splice(idx, 1);
+        self.hooks.showNotice('已取消固定: ' + (g.project || g.path));
+      } else {
+        arr.unshift(g.path);   // 新固定的放最前
+        self.hooks.showNotice('已固定到顶部: ' + (g.project || g.path));
+      }
+      setPinnedProjects(arr);
+      self.renderGroups();
+      self.closeProjectCtxMenu();
+    });
+    menu.appendChild(pinItem);
+
+    // ===== 分隔线 =====
+    var sep = document.createElement('div');
+    sep.className = 'ctx-sep';
+    menu.appendChild(sep);
+
+    // ===== 排序方式 =====
+    var label = document.createElement('div');
+    label.className = 'ctx-label';
+    label.textContent = '排序方式';
+    menu.appendChild(label);
+
+    var modes = [
+      { value: SORT_MODE_CUSTOM, label: '自定义（固定 + 字母序）' },
+      { value: SORT_MODE_ALPHA, label: '字母序' },
+      { value: SORT_MODE_RECENT, label: '最近访问' }
+    ];
+    modes.forEach(function (m) {
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'ctx-item-btn' + (sortMode === m.value ? ' active' : '');
+      item.textContent = (sortMode === m.value ? '✓ ' : '  ') + m.label;
+      item.addEventListener('click', function () {
+        setSortMode(m.value);
+        self.renderGroups();
+        self.closeProjectCtxMenu();
+        self.hooks.showNotice('排序方式: ' + m.label);
+      });
+      menu.appendChild(item);
+    });
+
+    document.body.appendChild(menu);
+
+    // 点击菜单外部时关闭（延迟注册，避免打开菜单的同一次点击立即触发关闭）
+    setTimeout(function () {
+      self._projectCtxMenuOutsideHandler = function (e) {
+        if (!menu.contains(e.target)) self.closeProjectCtxMenu();
+      };
+      document.addEventListener('mousedown', self._projectCtxMenuOutsideHandler, true);
+    }, 0);
+  };
+
+  // 关闭项目分组右键菜单并移除外部点击监听
+  Sidebar.prototype.closeProjectCtxMenu = function () {
+    var menu = document.getElementById('project-ctx-menu');
+    if (menu) menu.remove();
+    if (this._projectCtxMenuOutsideHandler) {
+      document.removeEventListener('mousedown', this._projectCtxMenuOutsideHandler, true);
+      this._projectCtxMenuOutsideHandler = null;
+    }
   };
 
   /* ---------------- 会话归档：归档 / 恢复 / 查询 ---------------- */

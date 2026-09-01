@@ -136,6 +136,14 @@
   };
 
   /**
+   * 获取当前工作区可用 skills
+   * @returns {Promise<{ok: boolean, skills: Array<{name: string, description: string, filePath: string, baseDir: string}>, error?: string}>}
+   */
+  IpcClient.prototype.getAvailableSkills = function () {
+    return invoke('getAvailableSkills', []);
+  };
+
+  /**
    * 执行斜杠命令（/compact /tree /session /export /copy /share /clear）
    * 主进程按命令分发到 pi SDK 的真实 API，结果结构化返回：
    *   { ok, kind: 'compact'|'clear'|'copy'|'export'|'share'|'session'|'tree', ... }

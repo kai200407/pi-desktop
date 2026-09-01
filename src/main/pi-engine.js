@@ -62,13 +62,15 @@ class PiEngine {
 	// ---------------------------------------------------------------------------
 	// cwd 可选；opts.ephemeral=true 时用 inMemory SessionManager（不落盘）
 	//
-	// 【性能优化：实例池 + ModelRuntime 单例】
-	//   1. ModelRuntime 全局单例：与 cwd 无关，避免每次切换都重建（16ms）。
-	//   2. 实例池：按 cwd 缓存 {runtime, modelRuntime, services}，LRU 上限 3。
-	//      命中缓存时直接复用，跳过 createAgentSessionServices 的 skills 扫描
-	//      （实测 431-794ms），跨工作区切换从 700-1200ms 降到 ~50ms。
-	//   3. ephemeral（临时聊天）不入池——内存会话的生命周期由调用方控制。
+	// 【实例池说明】实例池按 cwd 缓存 runtime，LRU 上限 3。命中时直接复用，
+	// 跳过 createAgentSessionServices 的 skills 扫描（实测 431-794ms），
+	// 跨工作区切换从 700-1200ms 降到 ~50ms。
+	// ephemeral（临时聊天）不入池——内存会话的生命周期由调用方控制。
+	//
+	// opts.updateRecent（默认 true）：是否把 cwd 写入 recentCwds 首位。
+	// 点击会话切工作区时传 false，避免分组顺序跳动；显式切换保持 true。
 	async initPi(cwd, opts = {}) {
+		const updateRecent = opts.updateRecent !== false;  // 默认 true
 		const mod = await import("@earendil-works/pi-coding-agent");
 		const {
 			createAgentSessionRuntime, createAgentSessionServices,
@@ -88,9 +90,15 @@ class PiEngine {
 				this.pi = cached;
 				this.bindSession();
 				// 更新最近工作区（即便命中池也要写，保持列表顺序）
-				const rec = (this._loadConf().recentCwds || []).filter((x) => x !== workdir);
-				rec.unshift(workdir);
-				this._saveConf({ cwd: workdir, recentCwds: rec.slice(0, 10) });
+				// 【分组稳定性】仅在 updateRecent=true 时更新（点击会话不更新）
+				if (updateRecent) {
+					const rec = (this._loadConf().recentCwds || []).filter((x) => x !== workdir);
+					rec.unshift(workdir);
+					this._saveConf({ cwd: workdir, recentCwds: rec.slice(0, 10) });
+				} else {
+					// 即便不更新 recent 顺序，也要确保 cwd 落盘（下次启动恢复）
+					this._saveConf({ cwd: workdir });
+				}
 				this.pushSessionInfo();
 				return this.pi;
 			}
@@ -144,9 +152,14 @@ class PiEngine {
 
 		this.pi = instance;
 		this.bindSession();
-		const rec = (this._loadConf().recentCwds || []).filter((x) => x !== workdir);
-		rec.unshift(workdir);
-		this._saveConf({ cwd: workdir, recentCwds: rec.slice(0, 10) });
+		// 【分组稳定性】仅在 updateRecent=true 时更新 recentCwds 顺序
+		if (updateRecent) {
+			const rec = (this._loadConf().recentCwds || []).filter((x) => x !== workdir);
+			rec.unshift(workdir);
+			this._saveConf({ cwd: workdir, recentCwds: rec.slice(0, 10) });
+		} else {
+			this._saveConf({ cwd: workdir });
+		}
 		this.pushSessionInfo();
 		return this.pi;
 	}

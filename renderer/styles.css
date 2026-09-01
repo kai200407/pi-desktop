@@ -654,6 +654,51 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 /* 项目下的会话：缩进、单行截断 */
 .proj-block { margin-bottom: calc(var(--spacing) * 2); }
 
+/* ===== 固定分组标识 =====
+   固定到顶部的工作区分组：头部背景微调 + 文件夹图标换色提示。
+   不用 emoji 📌，用 CSS 变量保证亮/暗主题都协调。 */
+.proj-block.pinned .proj-row {
+  background: var(--bg-elevated);
+  border-radius: 6px;
+}
+.proj-block.pinned .proj-row:hover { background: var(--bg-hover); }
+.proj-block.pinned .proj-row.current { background: var(--bg-active); }
+/* 固定标记：文件夹图标前加小圆点（纯 CSS，不引入 emoji 字体差异） */
+.proj-block.pinned .proj-row svg {
+  color: var(--text);
+  opacity: 0.85;
+}
+
+/* ===== 工作区分组右键菜单（排序/固定） =====
+   复用 .session-ctx-menu 的浮层风格，仅追加分组特有的 label/active 样式。
+   【注意】分组菜单是动态创建在 body 上的，不挂 .popover 基类（避免 overflow:hidden），
+   所以这里补全 position/border 属性。 */
+.project-ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+  padding: 6px 0;
+}
+/* 菜单内的小标题（如「排序方式」），弱化显示 */
+.ctx-label {
+  padding: 4px 16px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: default;
+  user-select: none;
+}
+/* 当前选中的排序模式：高亮背景 */
+.ctx-item-btn.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
 .session-item {
   display: block;
   width: 100%;
@@ -1211,6 +1256,28 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   color: var(--text);
   overflow-x: auto;
   white-space: pre;
+}
+
+/* ===== Skill 信息卡片 ===== */
+/* 加载 skill 后展示技能描述，作为消息流中的信息卡片留存 */
+.skill-info-card {
+  margin-bottom: calc(var(--spacing) * 4);
+  padding: calc(var(--spacing) * 3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.skill-info-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: calc(var(--spacing) * 2);
+}
+.skill-info-content {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 
 /* ---------------- 会话统计状态栏（中栏底部、输入卡片上方） ---------------- */

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("piAPI", {
 	compact: () => ipcRenderer.invoke("pi:compact"),
 	// 斜杠命令：/compact /tree /session /export /copy /share /clear
 	executeCommand: (command) => ipcRenderer.invoke("pi:executeCommand", { command }),
+	// 获取当前工作区可用 skills
+	getAvailableSkills: () => ipcRenderer.invoke("pi:getAvailableSkills"),
 	// 会话统计：Token 用量 / 缓存命中率 / 成本 / 上下文占用（中栏底部状态栏用）
 	getSessionStats: () => ipcRenderer.invoke("pi:getSessionStats"),
 

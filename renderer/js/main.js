@@ -294,7 +294,8 @@
 		document.addEventListener('mousedown', (e) => {
 			if (e.target.closest && e.target.closest(
 				'#model-pop, #thinking-pop, #model-btn, #thinking-btn, #cwd-pop, #nav-more, #btn-add-project, ' +
-				'#session-ctx-menu, #download-pop, #more-pop, #btn-download, #btn-more, #branch-pop, .branch-badge'
+				'#session-ctx-menu, #download-pop, #more-pop, #btn-download, #btn-more, #branch-pop, .branch-badge, ' +
+				'#project-ctx-menu'
 			)) return;
 			closeAllPopovers();
 		});
@@ -577,6 +578,9 @@
 		popovers.forEach(pop => {
 			if (pop) pop.classList.add('hidden');
 		});
+		// 动态创建在 body 上的分组右键菜单（无固定 id，直接 remove）
+		const projCtxMenu = $('project-ctx-menu');
+		if (projCtxMenu) projCtxMenu.remove();
 	}
 
 	// 弹层定位（坐标版）：sidebar 模块以 (pop, clientX, clientY) 调用。
