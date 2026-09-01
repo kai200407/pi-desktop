@@ -54,34 +54,10 @@
           </svg>
           <span>新对话</span>
         </button>
-        <!-- 临时聊天：会话不落盘，关掉即焚（Codex 同名功能）。实现：主进程用
-             SessionManager.inMemory() 建 runtime，后续 newSession 自动保持不落盘 -->
-        <button id="btn-ephemeral" class="nav-row" type="button" title="临时聊天（不保存到会话列表）">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M9.5 1.8h4.7v4.7" />
-            <path d="M14.2 1.8L7.4 8.6" />
-            <path d="M12.6 9.4v3.4a1.6 1.6 0 0 1-1.6 1.6H3.4a1.6 1.6 0 0 1-1.6-1.6V5.2a1.6 1.6 0 0 1 1.6-1.6h3.4" />
-          </svg>
-          <span>临时聊天</span>
-        </button>
-        <button id="nav-scheduled" class="nav-row" type="button">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="5.8" /><polyline points="8,4.6 8,8 10.6,9.4" />
-          </svg>
-          <span>已安排</span>
-        </button>
-        <button id="nav-plugins" class="nav-row" type="button">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="5.8" /><circle cx="8" cy="8" r="2.2" />
-          </svg>
-          <span>插件</span>
-        </button>
-        <button id="nav-more" class="nav-row" type="button" title="更多（切换工作区）">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="3.4" cy="8" r=".9" /><circle cx="8" cy="8" r=".9" /><circle cx="12.6" cy="8" r=".9" />
-          </svg>
-          <span>更多</span>
-        </button>
+        <!-- 已移除：临时聊天 / 已安排 / 插件 / 更多（均无用或占位未实现）
+             原 #btn-ephemeral / #nav-scheduled / #nav-plugins / #nav-more 四个导航行。
+             注：macOS 原生菜单「新建临时聊天 ⇧⌘N」仍保留，走 Sidebar.newEphemeral()；
+             工作区切换入口保留在项目分组标题行的「+」按钮（#btn-add-project）。 -->
       </nav>
 
       <!-- 项目分组会话列表 -->
@@ -255,31 +231,10 @@
           </div>
         </div>
 
-        <!-- 卡片下方上下文行：工作区名 + 插件占位 + 浏览器开关 -->
-        <div id="context-bar" class="context-bar">
-          <span class="ctx-item" title="当前工作区">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M2 4.2h4.2l1.3 1.6H14v6.6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z" />
-            </svg>
-            <span id="ctx-cwd" class="ctx-text">—</span>
-          </span>
-          <button id="btn-plugins" class="ctx-item ctx-btn" type="button" title="插件（占位，暂未实现）">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="2.4" y="2.4" width="4.8" height="4.8" rx="1" />
-              <rect x="8.8" y="2.4" width="4.8" height="4.8" rx="1" />
-              <rect x="2.4" y="8.8" width="4.8" height="4.8" rx="1" />
-              <rect x="8.8" y="8.8" width="4.8" height="4.8" rx="1" />
-            </svg>
-            <span class="ctx-text">插件</span>
-          </button>
-          <span class="toolbar-spacer"></span>
-          <button id="btn-toggle-browser-inline" class="icon-btn sm hidden" type="button" title="切换浏览器面板">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
-              <line x1="10" y1="2.5" x2="10" y2="13.5" />
-            </svg>
-          </button>
-        </div>
+        <!-- 已移除：卡片下方上下文行 #context-bar（用户反馈无用）
+             原内含：#ctx-cwd 工作区指示器（用户视为「工作区选择器（tcic-owner）」占位）、
+                    #btn-plugins 插件占位按钮、#btn-toggle-browser-inline（恒 hidden）。
+             工作区信息仍可从左栏「项目分组」标题与「+」按钮切换，不需要常驻显示。 -->
 
         <!-- 示例提示词：仅空状态可见 -->
         <div class="suggestions" id="suggestions"></div>

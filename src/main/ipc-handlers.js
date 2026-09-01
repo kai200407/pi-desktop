@@ -30,7 +30,7 @@
 // （main.js 里没有独立的"配置读写"通道 —— 配置改动都散在 pi:setModel /
 //   pi:setThinking / browser:toggle 等 handler 里通过 saveConf 落盘。）
 
-const { app, ipcMain, session, dialog, shell } = require("electron");
+const { app, ipcMain, session, dialog, shell, clipboard } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -204,6 +204,124 @@ function registerIpcHandlers(deps) {
 		} catch (err) {
 			console.error("[IPC] getSessionStats 失败:", err && err.message);
 			return null;
+		}
+	});
+
+	// ==== 斜杠命令（/compact /tree /session /export /copy /share /clear）====
+	// 渲染层输入框检测到以 / 开头的文本时走这里。pi SDK 并没有一个统一的
+	// runtime.executeCommand 入口（交互式 CLI 的斜杠命令都是直接调 session 方法
+	// 然后画 TUI），所以这里按命令分发到对应的真实 API，把结果以结构化数据返回，
+	// 由渲染层决定如何展示（文本/树/统计卡片）。
+	ipcMain.handle("pi:executeCommand", async (_e, payload) => {
+		const command = String((payload && payload.command) || "").trim();
+		if (!command) return { ok: false, error: "空命令" };
+		const parts = command.split(/\s+/);
+		const name = parts[0].toLowerCase();
+		const argString = command.slice(parts[0].length).trim();
+
+		try {
+			const { runtime } = await ensurePi();
+			const sess = runtime.session;
+			const sm = sess.sessionManager;
+
+			switch (name) {
+				case "/compact": {
+					// 与 CLI 一致：支持 /compact [自定义指令]
+					const r = await sess.compact(argString || undefined);
+					return { ok: true, kind: "compact", aborted: !!(r && r.aborted) };
+				}
+
+				case "/clear": {
+					await runtime.newSession();
+					bindSession();
+					pushSessionInfo();
+					send("session_cleared");
+					return { ok: true, kind: "clear" };
+				}
+
+				case "/copy": {
+					const text = sess.getLastAssistantText && sess.getLastAssistantText();
+					if (!text) return { ok: false, error: "还没有助手消息可复制" };
+					clipboard.writeText(text);
+					return { ok: true, kind: "copy", length: text.length };
+				}
+
+				case "/session": {
+					const stats = sess.getSessionStats();
+					return {
+						ok: true, kind: "session",
+						info: {
+							name: (sm.getSessionName && sm.getSessionName()) || null,
+							file: stats.sessionFile || "内存会话",
+							id: stats.sessionId,
+							cwd: runtime.cwd || (pi() && pi().cwd) || "",
+							totalMessages: stats.totalMessages,
+							userMessages: stats.userMessages,
+							assistantMessages: stats.assistantMessages,
+							toolCalls: stats.toolCalls,
+							tokens: stats.tokens,
+							cost: stats.cost,
+						},
+					};
+				}
+
+				case "/tree": {
+					const tree = sm.getTree && sm.getTree();
+					const leafId = sm.getLeafId && sm.getLeafId();
+					return { ok: true, kind: "tree", tree: serializeSessionTree(tree, leafId) };
+				}
+
+				case "/export": {
+					// /export [file]：无参数弹保存框；.jsonl 结尾走 exportToJsonl，其余走 HTML。
+					// 带引号或空格的路径参数沿用 CLI 的解析语义（取第一个 token，支持引号包裹）。
+					let target = parsePathArgument(argString);
+					if (!target) {
+						const ts = Date.now();
+						const { filePath, canceled } = await dialog.showSaveDialog(getWin(), {
+							title: "导出会话",
+							defaultPath: `session-${ts}.html`,
+							filters: [
+								{ name: "HTML", extensions: ["html"] },
+								{ name: "JSONL", extensions: ["jsonl"] },
+							],
+						});
+						if (canceled || !filePath) return { ok: false, error: "已取消导出", cancelled: true };
+						target = filePath;
+					}
+					let out;
+					if (/\.jsonl$/i.test(target)) out = sess.exportToJsonl(target);
+					else out = await sess.exportToHtml(target);
+					return { ok: true, kind: "export", filePath: out };
+				}
+
+				case "/share": {
+					// 沿用 CLI 的 gist 路径（Radius 网关是内部能力，桌面端不保证可用）。
+					// 需要本机已安装并登录 GitHub CLI (gh)。
+					const { spawnSync } = require("node:child_process");
+					const auth = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
+					if (auth.status !== 0) {
+						return { ok: false, error: "GitHub CLI 未登录，请先在终端运行 gh auth login" };
+					}
+					const tmpHtml = path.join(os.tmpdir(), `pi-share-${Date.now()}.html`);
+					try {
+						await sess.exportToHtml(tmpHtml);
+						const r = spawnSync("gh", ["gist", "create", "--public=false", tmpHtml], { encoding: "utf-8" });
+						if (r.status !== 0) {
+							return { ok: false, error: (r.stderr || "创建 gist 失败").trim() };
+						}
+						const gistUrl = String(r.stdout || "").trim();
+						return { ok: true, kind: "share", url: gistUrl };
+					} finally {
+						try { fs.unlinkSync(tmpHtml); } catch {}
+					}
+				}
+
+				default:
+					return { ok: false, error: "未知命令: " + name + "（支持 /compact /tree /session /export /copy /share /clear）" };
+			}
+		} catch (err) {
+			console.error("[IPC] executeCommand 失败:", command, err);
+			return { ok: false, error: (err && err.message) || String(err) };
 		}
 	});
 
@@ -661,6 +779,86 @@ function registerIpcHandlers(deps) {
 	ipcMain.handle("chrome:status", () => chromeBridge.chromeStatus());
 	ipcMain.handle("chrome:go", (_e, url) => chromeBridge.chromeGo(url));
 	ipcMain.handle("chrome:close", () => chromeBridge.closeChrome());
+}
+
+/* ---------------- 斜杠命令辅助函数 ---------------- */
+
+/**
+ * 解析 /export 的路径参数（与 CLI getPathCommandArgument 同语义）
+ * 支持：裸路径（第一个空白前截断）/ 单双引号包裹（允许含空格）
+ * @param {string} argsString 命令名之后的原始参数串
+ * @returns {string|undefined}
+ */
+function parsePathArgument(argsString) {
+	if (!argsString) return undefined;
+	const s = String(argsString).trimStart();
+	if (!s) return undefined;
+	const firstChar = s[0];
+	if (firstChar === '"' || firstChar === "'") {
+		const closing = s.indexOf(firstChar, 1);
+		if (closing < 0) return undefined;
+		return s.slice(1, closing);
+	}
+	const ws = s.search(/\s/);
+	return ws < 0 ? s : s.slice(0, ws);
+}
+
+/**
+ * 把 SessionManager.getTree() 的嵌套节点序列化成可跨 IPC 传输的纯文本树。
+ * SessionTreeNode = { entry, children, label }，entry 上挂着原始消息对象，
+ * 直接 IPC 会带上巨量无用字段（甚至不可序列化的引用），这里只抽取展示所需：
+ *   每个节点一行 ASCII：缩进 + 类型图标 + 摘要文本 + 当前分支标记
+ * @param {object|object[]} node  getTree() 返回的根节点数组（也可能为 null）
+ * @param {string|null} leafId 当前 leaf（用于标 ← 当前位置）
+ * @returns {{lines: string[], total: number}}
+ */
+function serializeSessionTree(node, leafId) {
+	const lines = [];
+	let total = 0;
+
+	function summarize(entry) {
+		switch (entry.type) {
+			case "message": {
+				const m = entry.message || {};
+				const role = m.role || "?";
+				let text = "";
+				if (typeof m.content === "string") text = m.content;
+				else if (Array.isArray(m.content)) {
+					text = m.content
+						.filter((b) => b && b.type === "text")
+						.map((b) => b.text || "")
+						.join(" ");
+				}
+				text = text.replace(/\s+/g, " ").trim();
+				if (text.length > 50) text = text.slice(0, 50) + "…";
+				const icon = role === "user" ? "👤" : role === "assistant" ? "🤖" : "🔧";
+				return icon + " " + role + (text ? ": " + text : "");
+			}
+			case "compaction": return "⚡ 压缩";
+			case "branch_summary": return "🌿 分支摘要";
+			case "model_change": return "🧠 模型 → " + (entry.modelId || "?");
+			case "thinking_level_change": return "💭 思考 → " + (entry.thinkingLevel || "?");
+			case "session_info": return entry.name ? "🏷 命名: " + entry.name : "🏷 会话信息";
+			case "label": return "🔖 " + (entry.label || "标签");
+			default: return "• " + entry.type;
+		}
+	}
+
+	function walk(n, depth, isLast, prefix) {
+		if (!n || !n.entry) return;
+		total++;
+		const connector = depth === 0 ? "" : (isLast ? "└── " : "├── ");
+		const cur = n.entry.id === leafId ? "  ← 当前" : "";
+		const label = n.label ? ` [${n.label}]` : "";
+		lines.push(prefix + connector + summarize(n.entry) + label + cur);
+		const kids = n.children || [];
+		const childPrefix = depth === 0 ? "" : prefix + (isLast ? "    " : "│   ");
+		kids.forEach((k, i) => walk(k, depth + 1, i === kids.length - 1, childPrefix));
+	}
+
+	const roots = Array.isArray(node) ? node : (node ? [node] : []);
+	roots.forEach((r) => walk(r, 0, true, ""));
+	return { lines, total };
 }
 
 /* ---------------- 会话导出辅助函数 ---------------- */

@@ -216,13 +216,10 @@
 				btnSearchClear: $('btn-search-clear'),
 				searchStat: $('search-stat'),
 				btnNew: $('btn-new'),
-				btnEphemeral: $('btn-ephemeral'),
 				sessionCtxMenu: $('session-ctx-menu'),
 				cwdPop: $('cwd-pop'),
-				navMore: $('nav-more'),
 				btnAddProject: $('btn-add-project'),
 				branchPop: $('branch-pop'),
-				ctxCwd: $('ctx-cwd'),
 				browserPane: browserPane,
 			},
 			hooks: {
@@ -380,27 +377,42 @@
 
 	// 切换左栏显隐：只负责状态翻转，具体设置交给 setSidebarHidden
 	function toggleSidebar() {
+		if (!sidebar) {
+			console.warn('[main] toggleSidebar: #sidebar 不存在，无法折叠');
+			return;
+		}
 		const hidden = !sidebar.classList.contains('collapsed');
 		console.log('[main] toggleSidebar:', hidden);
 		setSidebarHidden(hidden);
 	}
 
 	// 设置左栏显隐：统一处理 class、CSS 变量、状态持久化、bounds 上报
+	// 【实测坑】Chromium grid 折叠不能只 display:none（轨道会错位残留），
+	// 必须「轨道变量归零 + visibility 隐藏」双管齐下，见 styles.css #shell 注释。
 	function setSidebarHidden(hidden) {
+		if (!sidebar) {
+			console.warn('[main] setSidebarHidden: #sidebar 不存在');
+			return;
+		}
 		console.log('[main] setSidebarHidden:', hidden);
-		
+
 		// 1. 切换折叠 class（控制 visibility 和 pointer-events）
 		sidebar.classList.toggle('collapsed', hidden);
-		
-		// 2. 设置轨道宽度变量（grid-template-columns 使用，0px 表示折叠）
-		document.documentElement.style.setProperty('--sidebar-track', hidden ? '0px' : '');
-		
+
+		// 2. 设置轨道宽度变量（grid-template-columns 使用，0px 表示折叠；
+		//    展开时置空 = 移除该属性，让 var(--sidebar-track, --sidebar-width) 走回退值）
+		if (hidden) {
+			document.documentElement.style.setProperty('--sidebar-track', '0px');
+		} else {
+			document.documentElement.style.removeProperty('--sidebar-track');
+		}
+
 		// 3. 同步 shell class（用于兄弟选择器隐藏拖拽手柄）
 		if (shell) shell.classList.toggle('sidebar-hidden', hidden);
-		
+
 		// 4. 持久化到 localStorage（state.js setter 会自动处理）
 		state.sidebarHidden = hidden;
-		
+
 		// 5. 上报 bounds（中栏宽度变了，浏览器 slot 位置也要变）
 		reportBoundsNow();
 	}
@@ -511,24 +523,37 @@
 		});
 	}
 
-	function positionPopoverXY(popover, anchor, opts = {}) {
-		const anchorRect = anchor.getBoundingClientRect();
-		const browserRect = browserPane.getBoundingClientRect();
-		
-		let x = anchorRect.right + 8;
-		let y = anchorRect.top;
-
-		if (x + 300 > browserRect.left) {
-			x = anchorRect.left - 300 - 8;
+	// 弹层定位（坐标版）：sidebar 模块以 (pop, clientX, clientY) 调用。
+	// 【历史踩坑】此 hook 旧签名为 (popover, anchorEl, opts)，而 sidebar.js
+	// 传入的是鼠标坐标数字 → anchor.getBoundingClientRect() 抛 TypeError，
+	// 整个右键菜单在显示前就被异常中断（表现为「右键没反应」）。
+	// 现在统一为坐标语义：先显示（去 hidden）量尺寸，再夹紧到可视区内。
+	function positionPopoverXY(popover, x, y) {
+		if (!popover) {
+			console.warn('[main] positionPopoverXY: popover 不存在');
+			return;
 		}
+		console.log('[main] positionPopoverXY:', popover.id || popover.className, x, y);
 
-		const popHeight = opts.height || 400;
-		if (y + popHeight > window.innerHeight) {
-			y = window.innerHeight - popHeight - 20;
+		// 1. 先显示再量尺寸（hidden 时 offsetWidth/Height 为 0）
+		popover.classList.remove('hidden');
+		const w = popover.offsetWidth || 200;
+		const h = popover.offsetHeight || 200;
+
+		// 2. 右边界：浏览器面板可见时以它的左缘为界（原生 view 永远盖在 DOM 之上），
+		//    否则贴窗口右缘。坐标非法（非数字）时兜底到左上角安全位。
+		let right = window.innerWidth - 12;
+		if (browserPane && !browserPane.classList.contains('collapsed')) {
+			const paneLeft = browserPane.getBoundingClientRect().left;
+			if (paneLeft > 0) right = paneLeft - 8;
 		}
+		const px = (typeof x === 'number' && isFinite(x)) ? x : 8;
+		const py = (typeof y === 'number' && isFinite(y)) ? y : 8;
+		const left = Math.max(8, Math.min(px, right - w));
+		const top = Math.max(8, Math.min(py, window.innerHeight - h - 8));
 
-		popover.style.left = x + 'px';
-		popover.style.top = y + 'px';
+		popover.style.left = left + 'px';
+		popover.style.top = top + 'px';
 	}
 
 	// --- 辅助函数 -----------------------------------------------------------

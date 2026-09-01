@@ -135,6 +135,20 @@
     return invoke('getSessionStats', []);
   };
 
+  /**
+   * 执行斜杠命令（/compact /tree /session /export /copy /share /clear）
+   * 主进程按命令分发到 pi SDK 的真实 API，结果结构化返回：
+   *   { ok, kind: 'compact'|'clear'|'copy'|'export'|'share'|'session'|'tree', ... }
+   * 失败：{ ok:false, error } 或用户取消 { ok:false, cancelled:true }
+   * 注意超时：/share 要导出 HTML + 走 gh gist 网络请求，30s 默认超时可能不够，
+   * 这里放宽到 120s。
+   * @param {string} command - 完整命令文本（含 / 前缀与参数）
+   * @returns {Promise<object|null>}
+   */
+  IpcClient.prototype.executeCommand = function (command) {
+    return invoke('executeCommand', [command], 120000);
+  };
+
   /* =======================================================================
      二、会话管理
      ======================================================================= */

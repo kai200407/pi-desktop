@@ -19,8 +19,8 @@
                    call(name, ...args) -> Promise
        els:      DOM 元素表 { sidebar, sessionList, sessionTitle, searchRow,
                    sessionSearch, btnSearch, btnSearchClear, searchStat, btnNew,
-                   btnEphemeral, sessionCtxMenu, cwdPop, navMore, btnAddProject,
-                   branchPop, ctxCwd, browserPane }
+                   sessionCtxMenu, cwdPop, btnAddProject,
+                   branchPop, browserPane }
        hooks:    回调表 {
                    clearThread(),              // 清空中栏对话流
                    showNotice(text),           // 轻提示
@@ -223,7 +223,6 @@
     if (this.els.cwdPop) this.els.cwdPop.classList.add('hidden');
     if (this.els.sessionCtxMenu) this.els.sessionCtxMenu.classList.add('hidden');
     if (this.els.branchPop) this.els.branchPop.classList.add('hidden');
-    if (this.els.navMore) this.els.navMore.classList.remove('open');
     if (this.els.btnAddProject) this.els.btnAddProject.classList.remove('open');
   };
 
@@ -249,8 +248,24 @@
     this._set('activeSessionId', s.id);
     this.setTitle(this.sessionDisplayName(s));
     this.hooks.clearThread();
+    this._markSwitching(s.id);
     this.call('switchSession', s.id);
     this.refreshSessions();
+  };
+
+  /* 标记「正在切换到某会话」：切换期内主进程可能先广播 session_cleared
+     （跨项目 switchWorkspace 的副作用），handleEvent 凭此标记保留高亮。
+     兜底 15s 自动清除，防止切换失败时标记永远残留。 */
+  Sidebar.prototype._markSwitching = function (id) {
+    var self = this;
+    this._switchingTo = id;
+    clearTimeout(this._switchingTimer);
+    this._switchingTimer = setTimeout(function () {
+      if (self._switchingTo === id) {
+        console.warn('[Sidebar] 切换超时，清除切换标记:', id);
+        self._switchingTo = null;
+      }
+    }, 15000);
   };
 
   Sidebar.prototype.setTitle = function (text, ephemeral) {
@@ -291,16 +306,24 @@
       b.appendChild(badge);
     }
 
+    // 右键：打开会话上下文菜单（重命名/删除/复制 ID/导出）
     b.addEventListener('contextmenu', function (e) {
       e.preventDefault();
       e.stopPropagation();
+      console.log('[Sidebar] 会话右键:', s.id, e.clientX, e.clientY);
       self.openSessionCtxMenu(s, e.clientX, e.clientY);
     });
+    // 左键：切换到该会话（运行中或已是活动会话时忽略）
     b.addEventListener('click', function () {
-      if (self._get('running') || self.isActiveSession(s)) return;
+      console.log('[Sidebar] 会话点击:', s.id);
+      if (self._get('running') || self.isActiveSession(s)) {
+        console.log('[Sidebar] 忽略点击（运行中或已激活）');
+        return;
+      }
       self._set('activeSessionId', s.id);
       self.setTitle(self.sessionDisplayName(s));
       self.hooks.clearThread();
+      self._markSwitching(s.id);
       self.call('switchSession', s.id);
       self.refreshSessions();
     });
@@ -463,7 +486,15 @@
   Sidebar.prototype.openSessionCtxMenu = function (s, x, y) {
     var self = this;
     var menu = this.els.sessionCtxMenu;
-    if (!menu) return;
+    if (!menu) {
+      console.warn('[Sidebar] openSessionCtxMenu: #session-ctx-menu 不存在');
+      return;
+    }
+    if (!s || !s.id) {
+      console.warn('[Sidebar] openSessionCtxMenu: 会话对象无效', s);
+      return;
+    }
+    console.log('[Sidebar] 打开右键菜单:', s.id, x, y);
     menu.innerHTML = '';
     menu.dataset.sid = s.id;
 
@@ -777,10 +808,10 @@
     Promise.resolve(this.call('getCwd')).then(function (d) { self.setCwd(d); }).catch(function () {});
   };
 
-  // 点「更多」或项目区的「+」：弹出“最近工作区 + 选择其他目录”（仿 Codex）
+  // 点项目区的「+」：弹出"最近工作区 + 选择其他目录"（仿 Codex）
   Sidebar.prototype.toggleWorkspacePicker = function (anchor) {
     var self = this;
-    anchor = anchor || this.els.navMore || this.els.sidebar;
+    anchor = anchor || this.els.sidebar;
     if (this._get('running')) return;
     var opened = this.els.cwdPop && !this.els.cwdPop.classList.contains('hidden');
     var sameAnchor = this.cwdAnchor === anchor;
@@ -881,19 +912,12 @@
       });
     }
 
-    // 新对话 / 临时聊天
+    // 新对话
     if (els.btnNew) els.btnNew.addEventListener('click', function () {
       self.newSession();
     });
-    if (els.btnEphemeral) els.btnEphemeral.addEventListener('click', function () {
-      self.newEphemeral();
-    });
 
-    // 工作区弹层触发按钮（「更多」与项目区「+」）
-    if (els.navMore) els.navMore.addEventListener('click', function (e) {
-      e.stopPropagation();
-      self.toggleWorkspacePicker(els.navMore);
-    });
+    // 工作区弹层触发按钮（项目区「+」）
     if (els.btnAddProject) els.btnAddProject.addEventListener('click', function (e) {
       e.stopPropagation();
       self.toggleWorkspacePicker(els.btnAddProject);
@@ -969,8 +993,13 @@
     Promise.resolve(this.call('getCwd'))
       .then(function (result) {
         console.timeEnd('[Sidebar] 工作区获取');
-        if (result && result.cwd) {
-          self.setCwd(result.cwd);
+        // 主进程 pi:getCwd 返回的是【纯路径字符串】（preload 直传 invoke 结果），
+        // 不是 {cwd} 对象——旧代码判 result.cwd 永远为假，工作区标签从未被设置。
+        var cwd = (typeof result === 'string') ? result : (result && result.cwd);
+        if (cwd) {
+          self.setCwd(cwd);
+        } else {
+          console.warn('[Sidebar] getCwd 返回为空:', result);
         }
       })
       .catch(function (err) {
@@ -989,12 +1018,24 @@
         return false;                       // 对话流收尾还得 app.js 做，不拦截
 
       case 'session_cleared':
-        this._set('activeSessionId', null);
+        // 【实测坑】跨项目点会话时，主进程 pi:switchSession 会先 switchWorkspace
+        // （其内部会广播 session_cleared），紧接才 switchSession 装载目标会话并回灌
+        // session_restored。此时点击刚设置的 activeSessionId 不能跟着清掉，
+        // 否则会话内容虽回灌成功，列表高亮却丢了（且后续点击被判「已激活」跳过）。
+        // 判据：_switchingTo 记录了正在切换的目标 id，切换期内不清 activeSessionId。
+        if (!this._switchingTo) {
+          this._set('activeSessionId', null);
+        } else {
+          console.log('[Sidebar] 切换工作区期间的 session_cleared，保留 activeSessionId:', this._switchingTo);
+        }
         this._set('currentSessionId', null);
         this.refreshSessions();
         return false;                       // clearThread / 标题复位由 app.js 统一做
 
       case 'session_restored':
+        // 切换完成：清除切换标记。若 activeSessionId 因时序问题丢了（如旧版会话
+        // 直接 session_restored 无 session_cleared），不强行恢复——点击时早已设置。
+        this._switchingTo = null;
         this.refreshSessions();
         return false;
 

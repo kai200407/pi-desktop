@@ -147,8 +147,8 @@
       importResult: $('import-result'),
       // 跨栏协作元素
       shell: $('shell'),
-      btnBrowser: $('btn-browser'),
-      btnBrowserInline: $('btn-toggle-browser-inline')
+      btnBrowser: $('btn-browser')
+      // 已移除：btnBrowserInline（#btn-toggle-browser-inline 已随 #context-bar 删除）
     };
 
     // bounds 上报去重状态
@@ -273,7 +273,6 @@
     document.documentElement.style.setProperty('--browser-track', visible ? '' : '0px');
     // 可选按钮（当前已隐藏）存在时同步 active 态
     if (this.ui.btnBrowser) this.ui.btnBrowser.classList.toggle('active', visible);
-    if (this.ui.btnBrowserInline) this.ui.btnBrowserInline.classList.toggle('active', visible);
     try { localStorage.setItem(BROWSER_KEY, visible ? '1' : '0'); } catch (e) {}
 
     this.syncBrowserView();
@@ -803,8 +802,7 @@
     onClick(this.ui.btnMore, 'btn-more', function () { self.showFavorites(); });
 
     /* 右栏开关按钮 —— #shell 右上角永恒按钮 #btn-show-browser 是【唯一入口】。
-       #btn-browser（左栏底部）与 #btn-toggle-browser-inline（中栏上下文行）
-       已在 index.html 中隐藏，不绑事件，避免多入口状态不同步。
+       #btn-browser（左栏底部）已在 index.html 中隐藏，不绑事件，避免多入口状态不同步。
        注意：main.js 不得再对 #btn-show-browser 重复绑定，否则一次点击
        触发两次 toggle 互相抵消，表现为「按钮没反应」（历史踩过）。 */
     onClick(this.ui.btnShowBrowser, 'btn-show-browser', function () {

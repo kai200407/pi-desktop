@@ -1095,6 +1095,65 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   white-space: pre-wrap;
 }
 
+/* ---- 斜杠命令反馈条（/compact /tree /session 等）---- */
+/* 与 error-box 同族：左侧色条标识状态（info 灰 / success 绿 / error 红），
+   作为命令历史留在消息流中，不自动消失。 */
+.command-feedback {
+  margin-bottom: calc(var(--spacing) * 4);
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.command-feedback.success {
+  border-left-color: #10b981;
+  color: #10b981;
+}
+.command-feedback.error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+/* /session、/tree 的结构化结果卡片 */
+.command-detail .cd-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: calc(var(--spacing) * 2);
+}
+.command-detail .cd-row {
+  display: flex;
+  gap: calc(var(--spacing) * 3);
+  padding: calc(var(--spacing) * 1) 0;
+  font-size: 12.5px;
+}
+.command-detail .cd-k {
+  flex: 0 0 56px;
+  color: var(--text-tertiary);
+}
+.command-detail .cd-v {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  word-break: break-all;
+}
+.command-detail .cd-tree {
+  margin: 0;
+  padding: calc(var(--spacing) * 2);
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+
 /* ---------------- 会话统计状态栏（中栏底部、输入卡片上方） ---------------- */
 /* 灰色小字一行：上下文占用 · 缓存命中率 · 累计成本。
    与输入卡片同宽（max-width 对齐 thread 内容区），居中展示。 */
@@ -1750,6 +1809,9 @@ mark.find-cur { background: rgba(250, 204, 21, .8); color: #1a1a1a; }
 .session-ctx-menu {
   width: 160px;
   padding: calc(var(--spacing) * 1) 0;
+  /* 【实测坑】.popover 默认 overflow:hidden 会把「导出」子菜单（left:100%
+     绝对定位在菜单外侧）整个裁掉——这里必须放开溢出，子菜单才看得见。 */
+  overflow: visible;
 }
 .ctx-item-btn {
   display: flex;
