@@ -125,6 +125,9 @@ function initModules() {
 		loadConf,
 		saveConf,
 		serializeMessages: serializeMessages,
+		// 【性能优化】hover 预取消息缓存（渲染层 preloadSession → 点击命中）
+		readMessagesCached: piEngine.readMessagesCached.bind(piEngine),
+		takeMessagesCache: piEngine.takeMessagesCache.bind(piEngine),
 		getUnsubscribe: () => piEngine.unsubscribe,
 		setUnsubscribe: (fn) => { piEngine.unsubscribe = fn; },
 	});
@@ -159,6 +162,8 @@ function initModules() {
 			getLastBounds: () => browserMgr.lastBounds,
 			setLastBounds: (b) => { browserMgr.lastBounds = b; },
 			HOME_URL: browserMgr.HOME_URL,
+			// 新增：浏览器 conversation 切换
+			switchConversation: browserMgr.switchConversation.bind(browserMgr),
 		},
 		sessionMgr: {
 			switchWorkspace: sessionMgr.switchWorkspace.bind(sessionMgr),
@@ -199,6 +204,13 @@ function initModules() {
 	// 「打开浏览器面板」后没有任何 view 可贴。必须在窗口创建后调用一次。
 	browserMgr.createBrowserView();
 	browserMgr.hookDownloads();
+
+	// ===== 新增：设置浏览器初始 conversation =====
+	const initialCwd = piEngine.pi?.cwd || conf.cwd || process.cwd();
+	if (initialCwd) {
+		browserMgr.switchConversation(initialCwd);
+		console.log('[Main] 浏览器初始 conversation:', initialCwd);
+	}
 
 	// 7. 预加载会话列表（不等待，后台异步执行）
 	sessionMgr.preloadSessions();

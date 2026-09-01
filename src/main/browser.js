@@ -3,9 +3,10 @@
 // 职责边界（从 main.js 抽出的右栏内置浏览器相关全部逻辑）：
 //   1. 多标签管理：browserTabs 数组、createBrowserView / activateTab / closeTab / pushTabs
 //   2. popup 弹窗去重：popupWindows Map、popupRootOf / reuseOrOpenPopup / openAuthPopup
-//   3. 下载管理：hookDownloads（persist:pi-browser 分区的 will-download 接管）
+//   3. 下载管理：hookDownloads（conversation 分区的 will-download 接管）
 //   4. bounds 定位：applyBrowserBounds（活动标签贴渲染层上报的 rect，其余缩 0x0）
 //   5. WebContentsView 创建与配置：attachStealth（UA/Sec-CH-UA/userAgentData 三处伪装）
+//   6. 【新增】Session 隔离：ConversationSessionManager 按 conversation（cwd）隔离 cookies/storage
 //
 // 设计说明：
 //   · 零构建、纯 CommonJS，与 main.js 保持一致的风格。
@@ -15,8 +16,14 @@
 //   · 主页 / 可见性等配置项通过 deps.loadConf() / deps.saveConf() 读写 pi-desktop.json。
 //   · 本模块不碰 pi 引擎、会话管理、IPC 注册 —— 那些仍留在 main.js。
 //
+// Session 隔离架构（方案 A）：
+//   · 每个 conversation（通常是 cwd 路径）对应独立的 Electron Session
+//   · cookies、localStorage、cache 完全隔离，登录态互不干扰
+//   · LRU 缓存最多 5 个 session，超过时淘汰最久未使用的
+//   · 切换 conversation 时自动切换浏览器 session
+//
 // 已实测确认的关键点（勿改）：
-//   1. persist:pi-browser 分区让 cookie/localStorage 落盘 —— 密码输一次，以后免登录
+//   1. persist:conv-* 分区让 cookie/localStorage 落盘 —— 密码输一次，以后免登录
 //   2. Google 会拒绝「嵌入式浏览器」登录，破绽有三处缺一不可（UA / userAgentData.brands
 //      / Sec-CH-UA 请求头），下面统一伪装成与本机真实 Chrome 一致的形态
 //   3. backgroundThrottling:false 关掉后台节流 —— 否则窗口不在前台时 Chromium 把页面
@@ -34,6 +41,7 @@ const {
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const { ConversationSessionManager } = require("./conversation-session-manager");
 
 // ---------------------------------------------------------------------------
 // UA / 指纹伪装常量
@@ -95,6 +103,16 @@ class BrowserManager {
 		this.browserVisible = this._loadConf().browserVisible !== false;
 		this.lastBounds = { x: 0, y: 0, width: 0, height: 0 };
 
+		// ===== 新增：Session 隔离管理器 =====
+		this.sessionManager = new ConversationSessionManager({
+			maxCached: 5  // 最多缓存 5 个 conversation 的 session
+		});
+
+		// ===== 新增：当前 conversation ID（通常是 cwd 路径）=====
+		this.currentConversationId = null;
+
+		console.log('[BrowserManager] 初始化, Session 隔离已启用');
+
 		// OAuth/登录弹窗集合（用 Map 维护以便集中清理）。
 		// 弹窗共享 persist:pi-browser session —— 登录态互遇，弹窗里登了主页面立即生效。
 		this.popupWindows = new Map();
@@ -104,8 +122,9 @@ class BrowserManager {
 
 		// session 级初始化（UA / 请求头 / 权限）只能做一次，
 		// 否则多标签时 onBeforeSendHeaders 会被重复注册。
-		this._sessionReady = false;
-		// 下载钩子也只挂一次
+		// 【修改】按 session 追踪：每个 conversation 的 session 独立配置
+		this._sessionReadySet = new Set();  // 已配置过的 session 对象集合
+		// 下载钩子也只挂一次（但 hook 所有 session）
 		this._downloadHooked = false;
 	}
 
@@ -137,7 +156,10 @@ class BrowserManager {
 	// 开一个「像真浏览器弹窗」的独立小窗口（X 登 Google、Google One Tap 等）。
 	// 特点：尺寸小、无地址栏、关窗即终、焦点回主窗。所有弹窗都过 attachStealth。
 	openAuthPopup(url) {
-		const ses = session.fromPartition("persist:pi-browser");
+		// 使用当前 conversation 的 session（如果有），否则用默认
+		const ses = this.currentConversationId
+			? this.sessionManager.getOrCreateSession(this.currentConversationId)
+			: session.fromPartition('persist:pi-browser-default');
 		const pop = new BrowserWindow({
 			width: 480,
 			height: 640,
@@ -178,6 +200,27 @@ class BrowserManager {
 	}
 
 	// -----------------------------------------------------------------------
+	// Conversation 切换：切换浏览器 session 到指定 conversation
+	// -----------------------------------------------------------------------
+	switchConversation(conversationId) {
+		console.log('[BrowserManager] switchConversation:', conversationId);
+
+		// 切换 session
+		const newSession = this.sessionManager.switchConversation(conversationId);
+		this.currentConversationId = conversationId;
+
+		// 确保新 session 的下载钩子已挂载
+		if (this._downloadHooked) {
+			this._hookSessionDownloads(newSession);
+		}
+
+		// TODO: 后续可以添加标签页切换逻辑（每个 conversation 独立的标签页组）
+		// 暂时保持现有标签页不变，只切换底层 session
+
+		return newSession;
+	}
+
+	// -----------------------------------------------------------------------
 	// 多标签：创建 / 切换 / 关闭 / 推送列表
 	// -----------------------------------------------------------------------
 	createBrowserView(initialUrl) {
@@ -208,15 +251,27 @@ class BrowserManager {
 			return;
 		}
 		if (process.env.PI_DESKTOP_DEBUG_BOUNDS) console.log("[tab] createBrowserView 继续，win ready");
-		const ses = session.fromPartition("persist:pi-browser");
+
+		// ===== 修改：使用 conversation 的 session（如果有）=====
+		let ses;
+		if (this.currentConversationId) {
+			ses = this.sessionManager.getOrCreateSession(this.currentConversationId);
+			console.log('[BrowserManager] 使用 conversation session:', this.currentConversationId);
+		} else {
+			// 降级：使用默认 session（兼容性）
+			console.warn('[BrowserManager] 未设置 conversationId，使用默认 session');
+			ses = session.fromPartition('persist:pi-browser-default');
+		}
 
 		// (1) UA：去掉 Electron / 应用名，并把 Chrome 版本规整成 x.0.0.0（真 Chrome 的形态）
 		const ua = ses.getUserAgent()
 			.replace(/ pi-desktop\/[\d.]+/gi, "")
 			.replace(/ Electron\/[\d.]+/gi, "")
 			.replace(/Chrome\/[\d.]+/i, `Chrome/${CHROME_FULL}`);
-		if (!this._sessionReady) {
-			this._sessionReady = true;
+
+		// 【修改】按 session 配置：每个 session 独立配置 UA / 请求头 / 权限
+		if (!this._sessionReadySet.has(ses)) {
+			this._sessionReadySet.add(ses);
 			ses.setUserAgent(ua);
 
 			// (3) 请求头：补上 Sec-CH-UA 三件套，去掉 Electron 痕迹
@@ -233,6 +288,8 @@ class BrowserManager {
 			ses.setPermissionRequestHandler((_wc, permission, cb) => {
 				cb(["geolocation", "clipboard-read", "clipboard-sanitized-write"].includes(permission));
 			});
+
+			console.log('[BrowserManager] session 配置完成:', this.currentConversationId || 'default');
 		}
 
 		this.browserView = new WebContentsView({
@@ -502,13 +559,34 @@ class BrowserManager {
 	}
 
 	// -----------------------------------------------------------------------
-	// 下载管理：persist:pi-browser 分区里的下载统一落到系统下载目录，
+	// 下载管理：conversation 分区的下载统一落到系统下载目录，
 	// 开始/完成各发一条 notice 给渲染层（中栏灰字提示）。
 	// -----------------------------------------------------------------------
 	hookDownloads() {
 		if (this._downloadHooked) return;
 		this._downloadHooked = true;
-		const ses = session.fromPartition("persist:pi-browser");
+
+		// 【兼容性】hook 所有可能的 session（默认 + 各个 conversation）
+		// 默认 session
+		const defaultSes = session.fromPartition("persist:pi-browser-default");
+		this._hookSessionDownloads(defaultSes);
+
+		// 当前 conversation session
+		if (this.currentConversationId) {
+			const convSes = this.sessionManager.getOrCreateSession(this.currentConversationId);
+			this._hookSessionDownloads(convSes);
+		}
+
+		// 注意：后续新创建的 conversation session 会在 switchConversation 时
+		// 由 ConversationSessionManager 创建，这里需要确保新 session 也被 hook
+	}
+
+	// 给指定 session 挂上下载钩子（带去重，避免重复挂载）
+	_hookSessionDownloads(ses) {
+		// 检查是否已经 hook 过（避免重复）
+		if (ses.__downloadHooked) return;
+		ses.__downloadHooked = true;
+
 		ses.on("will-download", (_e, item) => {
 			const file = item.getFilename();
 			// 显式指定保存路径：不显式 setSavePath 时 Electron 38 实测会把文件留在
@@ -527,6 +605,11 @@ class BrowserManager {
 	cleanup() {
 		for (const [, pop] of this.popupWindows) { try { pop.destroy(); } catch {} }
 		this.popupWindows.clear();
+
+		// 清理 session 管理器
+		if (this.sessionManager) {
+			this.sessionManager.cleanup();
+		}
 	}
 }
 

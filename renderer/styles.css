@@ -594,11 +594,42 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   letter-spacing: .02em;
 }
 
-.session-list {
+/* 工作区列表滚动容器：占据剩余空间，允许垂直滚动；
+   归档分组移到独立固定容器后，这里只管工作区分组。 */
+.projects-scroll-container {
   flex: 1;
-  min-height: 0;
+  min-height: 0;                  /* 允许 flex 子项缩小，超出才出滚动条 */
   overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.projects-scroll-container::-webkit-scrollbar { width: 6px; }
+.projects-scroll-container::-webkit-scrollbar-track { background: transparent; }
+.projects-scroll-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.projects-scroll-container::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+.session-list {
   padding: 0 calc(var(--spacing) * 2) calc(var(--spacing) * 2);
+}
+
+/* 归档固定容器：钉在左栏底部（用户行之上），不参与工作区列表滚动；
+   归档会话多时容器内部自滚动，头部 sticky 保持可见。 */
+.archived-fixed-container {
+  flex: 0 0 auto;
+  max-height: 40vh;               /* 最多占 40% 视口高，避免压垮工作区列表 */
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-top: 1px solid var(--border);
+}
+
+.archived-fixed-container.hidden { display: none; }
+
+/* 归档分组头部：sticky 钉住，容器内滚动时「已归档 (N)」始终可见 */
+.archived-fixed-container .archived-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-sidebar);   /* 与左栏底色一致，滚动时盖住下方会话行 */
 }
 
 /* 项目行：折叠箭头 + 文件夹图标 + 项目名，当前项目整行高亮 */
@@ -807,12 +838,10 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   font-size: 12px;
 }
 
-/* ===== 已归档分组（P1：列表底部，默认折叠，弱化显示） ===== */
-/* 与正常项目分组之间加分隔线，视觉上明确「归档区」边界 */
+/* ===== 已归档分组（P1：固定左栏底部独立容器，默认折叠，弱化显示） ===== */
+/* 分隔线已由 .archived-fixed-container 的 border-top 提供 */
 .archived-group {
-  margin-top: calc(var(--spacing) * 4);
-  padding-top: calc(var(--spacing) * 3);
-  border-top: 1px solid var(--border);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2) calc(var(--spacing) * 2);
 }
 /* 分组头弱化：斜体 + 三级文字色，表达「不活跃」 */
 .archived-group .archived-head {
@@ -914,6 +943,39 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
   margin: calc(var(--spacing) * 4) auto 0;
 }
 #center:not(.thread-empty) .suggestions { display: none; }
+
+/* ---- 会话切换加载骨架屏（乐观 UI）----
+   点击会话后 showLoadingSkeleton 立即铺上；session_restored 到达时
+   restoreSession → clearThread 整体替换。动画用透明度呼吸，不用位移动画
+   （位移会触发 layout，呼吸只碰合成层）。 */
+.loading-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 6);
+  width: 100%;
+  max-width: var(--thread-content-max-width);
+  margin: 0 auto;
+  padding: calc(var(--spacing) * 6) calc(var(--spacing) * 4);
+}
+.skeleton-item {
+  height: 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-active, rgba(255, 255, 255, .08));
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+.skeleton-item.user {
+  align-self: flex-end;
+  width: 42%;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble, rgba(255, 255, 255, .10));
+}
+.skeleton-item.short { width: 58%; }
+.skeleton-item:not(.user):not(.short) { width: 82%; }
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: .45; }
+  50% { opacity: 1; }
+}
 
 .suggestion {
   padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3.5);
@@ -1817,6 +1879,145 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 .cwd-item.current .ci-name { color: var(--accent); }
 .cwd-sep { height: 1px; margin: calc(var(--spacing) * 1) 0; background: var(--border); }
 .cwd-empty { padding: calc(var(--spacing) * 3); color: var(--text-tertiary); font-size: 11.5px; }
+
+/* =======================================================================
+   中栏顶部工具栏（conversation-toolbar）
+   位置：#thread 上方，跨整个中栏。内含工作区选择器 + 新对话按钮。
+   ======================================================================= */
+.conversation-toolbar {
+  display: flex; align-items: center; gap: calc(var(--spacing) * 3);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  /* 避免被 .thread 的滚动条影响 */
+  position: relative; z-index: 2;
+}
+
+/* 工作区选择器容器：占满剩余宽度 */
+.workspace-selector {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center;
+}
+
+/* 工作区按钮 */
+.workspace-btn {
+  display: inline-flex; align-items: center; gap: calc(var(--spacing) * 2);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: inherit; font-size: 12.5px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+  max-width: 100%;
+}
+.workspace-btn:hover { background: var(--bg-hover); }
+.workspace-btn.open { background: var(--bg-hover); border-color: var(--text-tertiary); }
+.workspace-btn .ws-label { color: var(--text-tertiary); font-size: 12px; }
+.workspace-btn .ws-name {
+  font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 240px;
+}
+.workspace-btn .ws-arrow {
+  width: 12px; height: 12px; flex-shrink: 0;
+  stroke: currentColor; fill: none; stroke-width: 1.5;
+  stroke-linecap: round; stroke-linejoin: round;
+  opacity: .6;
+  transition: transform .15s;
+}
+.workspace-btn.open .ws-arrow { transform: rotate(180deg); }
+
+/* 新对话按钮 */
+.btn-new-chat {
+  display: inline-flex; align-items: center; gap: calc(var(--spacing) * 1.5);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+  background: var(--accent);
+  color: #fff;
+  border: none; border-radius: var(--radius-md);
+  font-family: inherit; font-size: 12.5px; font-weight: 500;
+  cursor: pointer;
+  transition: opacity .15s, transform .1s;
+  flex-shrink: 0;
+}
+.btn-new-chat svg { stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+.btn-new-chat:hover { opacity: .92; }
+.btn-new-chat:active { transform: scale(.98); }
+
+/* =======================================================================
+   工作区菜单（workspace-menu）
+   ======================================================================= */
+.workspace-menu {
+  min-width: 280px; max-width: 420px;
+  max-height: 60vh; overflow-y: auto;
+  padding: calc(var(--spacing) * 1) 0;
+}
+.workspace-menu.hidden { display: none; }
+
+.ws-empty {
+  padding: calc(var(--spacing) * 3);
+  color: var(--text-tertiary); font-size: 12px;
+  text-align: center;
+}
+
+/* 一行 = 名称+路径按钮 + 可选删除按钮 */
+.ws-row {
+  display: flex; align-items: stretch;
+  width: 100%;
+}
+.ws-row:hover { background: var(--bg-hover); }
+
+.ws-item {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 2px;
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+  background: transparent; border: none;
+  text-align: left; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; color: var(--text);
+}
+.ws-item:hover { background: var(--bg-hover); }
+.ws-row:hover .ws-item { background: transparent; } /* 让整行 hover，不双重背景 */
+.ws-item.active .ws-item-name { color: var(--accent); font-weight: 600; }
+
+.ws-item-name {
+  font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-item-path {
+  font-size: 11px; color: var(--text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}
+
+/* 动作项（选择其他目录 / 管理工作区）：去除 active 加粗 */
+.ws-item.ws-action .ws-item-name { font-weight: 400; color: var(--text); }
+.ws-item.ws-action:hover .ws-item-name { color: var(--accent); }
+.ws-item.ws-action.active .ws-item-name { color: var(--accent); font-weight: 500; }
+
+/* 管理模式下的删除按钮（出现在行右侧） */
+.ws-del {
+  flex: 0 0 auto;
+  width: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.ws-del svg {
+  width: 12px; height: 12px;
+  stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round;
+}
+.ws-del:hover { color: #e74c3c; background: rgba(231, 76, 60, .08); }
+
+.ws-sep {
+  height: 1px;
+  margin: calc(var(--spacing) * 1) 0;
+  background: var(--border);
+}
 
 /* =======================================================================
    对话内查找条（⌘F / Ctrl+F）

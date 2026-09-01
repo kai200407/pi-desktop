@@ -227,6 +227,8 @@
 			hooks: {
 				clearThread: () => conversationModule?.clearThread(),
 				showNotice: (msg) => conversationModule?.showNotice(msg),
+				// 【性能优化】乐观 UI：点击会话立即铺骨架屏（详见 conversation.showLoadingSkeleton）
+				showLoadingSkeleton: () => conversationModule?.showLoadingSkeleton(),
 				closePopovers: closeAllPopovers,
 				positionPopoverXY: positionPopoverXY,
 				relTime: relTime,
@@ -237,6 +239,9 @@
 
 	function initConversation() {
 		conversationModule = new window.Conversation(center, state, ipc);
+		// 【性能优化】conversation 的刷新请求统一走 sidebar 的防抖调度（50ms 合并），
+		// 避免 agent_end / session_cleared 等事件各自触发一次列表 IPC + 全量重建。
+		conversationModule.onRefreshSessions = () => sidebarModule?.scheduleRefreshSessions();
 		conversationModule.init();
 	}
 

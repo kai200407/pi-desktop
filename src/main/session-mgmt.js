@@ -350,15 +350,28 @@ class SessionManager {
 			const owner = sessionFileOwner(file);
 			if (owner && owner !== this.pi.cwd) await this.switchWorkspace(owner, { updateRecent: false });
 			const { runtime } = await this.engine.ensurePi();
+			// 【性能优化】渲染层 hover 预取的消息缓存：命中时仍调用 runtime.switchSession
+			// 维持引擎状态，但广播 session_restored 用缓存数据（serializeMessages 结果同构），
+			// 不再等 runtime 切换完成，点击到首屏的延迟缩短一个 jsonl 读取+反序列化耗时。
+			const cached = this.engine.takeMessagesCache?.(file);
 			await runtime.switchSession(file);
 			this.engine.bindSession();
 			this.engine.pushSessionInfo();
 			// 回灌历史消息，让界面能重建对话
-			const msgs = runtime.session.messages || [];
-			this.send("session_restored", { messages: this.engine.serializeMessages(msgs) });
+			const msgs = cached || this.engine.serializeMessages(runtime.session.messages || []);
+			this.send("session_restored", { messages: msgs });
 		} catch (err) {
 			this.send("error", { message: `切换会话失败：${err.message}` });
 		}
+	}
+
+	// hover 预取：只读目标 jsonl 并序列化缓存，不动当前 runtime / 工作区。
+	// 静默失败——预取只是优化，读不了就让点击路径走原逻辑。
+	async preloadSession(file) {
+		try {
+			if (!file || typeof file !== "string") return;
+			await this.engine.readMessagesCached?.(file, this.engine.serializeMessages);
+		} catch { /* 预取失败静默 */ }
 	}
 
 	// 删除会话：删掉对应 .jsonl 文件并刷新列表。
@@ -436,14 +449,18 @@ class SessionManager {
 			const owner = sessionFileOwner(file);
 			if (owner && owner !== this.pi.cwd) await this.switchWorkspace(owner, { updateRecent: false });
 			const { runtime } = await this.engine.ensurePi();
+			const cached = this.engine.takeMessagesCache?.(file);
 			await runtime.switchSession(file);
 			this.engine.bindSession();
 			const r = await runtime.session.navigateTree(branchFromId, { summarize: false });
 			if (r && r.cancelled) return { ok: false, err: "cancelled" };
 			this.engine.pushSessionInfo();
 			// 回灌当前 leaf 路径的消息，让界面重建这条分支的对话
-			const msgs = runtime.session.messages || [];
-			this.send("session_restored", { messages: this.engine.serializeMessages(msgs) });
+			// 【性能优化】navigateTree 会改变消息集，预取缓存只在未走到这里时才有意义；
+			// 命中分支场景仍用 runtime 的最新 messages 保证正确性。
+			const msgs = this.engine.serializeMessages(runtime.session.messages || []);
+			void cached;
+			this.send("session_restored", { messages: msgs });
 			return { ok: true };
 		} catch (err) {
 			return { ok: false, err: err.message };

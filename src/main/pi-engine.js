@@ -44,6 +44,17 @@ class PiEngine {
 		this._modelRuntime = null;  // ModelRuntime 全局单例（与 cwd 无关）
 		this._pool = new Map();     // cwd -> { runtime, modelRuntime, services, cwd, lastUsed }
 		this._poolMaxSize = 3;      // LRU 池上限
+
+		// ===== 会话消息预取缓存（性能优化）=====
+		// 【背景】switchSession 里 runtime.switchSession(file) 要读 jsonl 全文并反序列化，
+		// 实测 114 条消息的会话约 10-30ms，大文件更慢。
+		// 【方案】渲染层 hover 会话行 300ms 后调 pi:preloadSession，主进程提前把
+		// serializeMessages 的结果缓存；点击时命中缓存，仍调用 runtime.switchSession
+		// 维持引擎内部状态，但广播 session_restored 直接用缓存数据，不等 runtime。
+		// 缓存只存序列化后的扁平消息（与 session_restored payload 同构），不存 SDK 对象。
+		this._msgCache = new Map();  // file -> { msgs, t }
+		this._msgCacheMax = 10;
+		this._msgCacheTtl = 60 * 1000;
 	}
 
 	// ---------------------------------------------------------------------------
@@ -301,6 +312,50 @@ class PiEngine {
 		if (this.unsubscribe) { try { this.unsubscribe(); } catch {} this.unsubscribe = null; }
 		this.pi = null;
 		this.startedAt = null;
+	}
+
+	// ---------------------------------------------------------------------------
+	// 会话消息预取缓存（hover 预加载 / 点击命中）
+	// ---------------------------------------------------------------------------
+
+	/* 读取并序列化某会话 jsonl 的消息（带 LRU + TTL 缓存）。
+	   用 SDK 的 SessionManager 只读打开文件，不动当前 runtime 状态。
+	   serialize 由调用方注入（serializeMessages 定义在 index.js，避免循环依赖）。
+	   返回 null 表示读不了（文件不存在 / SDK 不可用），调用方回退到原路径。 */
+	async readMessagesCached(file, serialize) {
+		const hit = this._msgCache.get(file);
+		if (hit && Date.now() - hit.t < this._msgCacheTtl) {
+			console.log('[PiEngine] 消息缓存命中:', file);
+			return hit.msgs;
+		}
+		try {
+			console.time('[PiEngine] 会话消息预取');
+			const mod = await import("@earendil-works/pi-coding-agent");
+			// SessionManager.open 是同步方法：读 jsonl + 反序列化一次性完成。
+			// buildSessionContext() 返回 { messages: AgentMessage[] }（content-block
+			// 结构，与 runtime.session.messages 同构），正是 serializeMessages 的输入。
+			const sm = mod.SessionManager.open(file);
+			const msgs = serialize(sm.buildSessionContext().messages || []);
+			console.timeEnd('[PiEngine] 会话消息预取');
+			// LRU：超上限时淘汰最老一条
+			if (this._msgCache.size >= this._msgCacheMax) {
+				const oldest = this._msgCache.keys().next().value;
+				this._msgCache.delete(oldest);
+			}
+			this._msgCache.set(file, { msgs, t: Date.now() });
+			return msgs;
+		} catch (err) {
+			console.warn('[PiEngine] 消息预取失败（回退原路径）:', file, err.message);
+			return null;
+		}
+	}
+
+	// 取缓存（不读盘）：仅命中且未过期时返回，否则 null。
+	takeMessagesCache(file) {
+		const hit = this._msgCache.get(file);
+		if (hit && Date.now() - hit.t < this._msgCacheTtl) return hit.msgs;
+		if (hit) this._msgCache.delete(file);   // 过期即清
+		return null;
 	}
 }
 

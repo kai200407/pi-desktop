@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld("piAPI", {
 	pickCwd: () => ipcRenderer.invoke("pi:pickCwd"),
 	getRecentCwds: () => ipcRenderer.invoke("pi:getRecentCwds"),
 	setCwd: (dir) => ipcRenderer.invoke("pi:setCwd", dir),
+	// 工作区管理：从最近列表移除（不动 sessions 目录下的历史会话文件）
+	removeRecentCwd: (dir) => ipcRenderer.invoke("pi:removeRecentCwd", dir),
 
 	// ---- 右栏浏览器 ----
 	browserGo: (url) => ipcRenderer.invoke("browser:go", url),

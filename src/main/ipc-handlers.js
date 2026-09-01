@@ -57,6 +57,7 @@ function registerIpcHandlers(deps) {
 	const {
 		createBrowserView, closeTab, activateTab,
 		applyBrowserBounds, pushTabs,
+		switchConversation: switchBrowserConversation,  // 新增：浏览器 conversation 切换
 	} = browserMgr;
 	const HOME_URL = browserMgr.HOME_URL;
 	// 这些是可变量，每次都要取最新值，不能解构固定
@@ -192,6 +193,13 @@ function registerIpcHandlers(deps) {
 		try {
 			if (!fs.statSync(dir).isDirectory()) throw new Error("不是目录");
 			await switchWorkspace(dir);
+
+			// ===== 新增：通知浏览器管理器切换 conversation =====
+			if (switchBrowserConversation) {
+				switchBrowserConversation(dir);
+				console.log('[IPC] 浏览器 conversation 已切换:', dir);
+			}
+
 			return dir;
 		} catch (err) {
 			send("error", { message: `切换工作区失败：${err.message}` });
@@ -208,7 +216,32 @@ function registerIpcHandlers(deps) {
 		if (r.canceled || !r.filePaths[0]) return null;
 		const next = r.filePaths[0];
 		await switchWorkspace(next);
+
+		// ===== 新增：通知浏览器管理器切换 conversation =====
+		if (switchBrowserConversation) {
+			switchBrowserConversation(next);
+			console.log('[IPC] 浏览器 conversation 已切换:', next);
+		}
+
 		return next;
+	});
+
+	// 工作区管理：从最近工作区列表移除某项。
+	// 只动 recentCwds 配置；不删 sessions 目录下的历史会话文件（用户数据）。
+	// 不允许移除「当前工作区」（会把当前会话现场弄丢），调用方需先切换到别处。
+	ipcMain.handle("pi:removeRecentCwd", async (_e, dir) => {
+		try {
+			if (!dir || typeof dir !== "string") return { ok: false, err: "bad arg" };
+			const cur = pi()?.cwd || conf.cwd || process.cwd();
+			if (dir === cur) return { ok: false, err: "不能移除当前工作区" };
+			const list = (loadConf().recentCwds || []).filter((x) => x !== dir);
+			saveConf({ recentCwds: list });
+			// 通知渲染层最近列表变了（sidebar / conversation 都会刷新各自的弹层）
+			send("recent_cwds", { list });
+			return { ok: true, list };
+		} catch (err) {
+			return { ok: false, err: err.message };
+		}
 	});
 
 	// ==== 压缩上下文 ====
@@ -381,6 +414,19 @@ function registerIpcHandlers(deps) {
 		send("session_cleared", { ephemeral: true });
 	});
 
+	// hover 预取：渲染层悬停会话行 300ms 后调用，主进程提前把目标 jsonl
+	// 的消息读出来并序列化缓存（piEngine._msgCache，LRU 10 条 / TTL 60s）。
+	// 点击时 switchSession 命中缓存直接广播，跳过 jsonl 读取+反序列化。
+	// 静默失败：预取只是优化，出错不影响点击路径。
+	ipcMain.handle("pi:preloadSession", async (_e, file) => {
+		try {
+			await sessionMgr.preloadSession(file);
+			return { ok: true };
+		} catch {
+			return { ok: false };
+		}
+	});
+
 	ipcMain.handle("pi:switchSession", async (_e, file) => {
 		try {
 			await ensurePi();
@@ -393,6 +439,14 @@ function registerIpcHandlers(deps) {
 			await runtime.switchSession(file);
 			bindSession();
 			pushSessionInfo();
+
+			// ===== 新增：通知浏览器管理器切换 conversation =====
+			const currentCwd = pi()?.cwd;
+			if (currentCwd && switchBrowserConversation) {
+				switchBrowserConversation(currentCwd);
+				console.log('[IPC] 浏览器 conversation 已切换:', currentCwd);
+			}
+
 			// 回灌历史消息，让界面能重建对话
 			const msgs = runtime.session.messages || [];
 			send("session_restored", { messages: serializeMessages(msgs) });
@@ -764,11 +818,33 @@ function registerIpcHandlers(deps) {
 	});
 
 	// 列出内置浏览器分区里的 Google cookie 名单（调试/验收用）
+	// 【修改】支持 conversation 隔离：列出所有 conversation session 的 cookies
 	ipcMain.handle("debug:listGoogleCookies", async () => {
-		const ses = session.fromPartition("persist:pi-browser");
-		const all = await ses.cookies.get({});
-		return all.filter((c) => /google|youtube|gstatic|ggpht|ytimg/.test(c.domain))
-			.map((c) => `${c.domain} ${c.name} secure=${c.secure?"1":"0"} httpOnly=${c.httpOnly?"1":"0"}`);
+		// 获取所有已缓存的 session
+		const sessions = [];
+		if (browserMgr.sessionManager && browserMgr.sessionManager.sessions) {
+			for (const [convId, data] of browserMgr.sessionManager.sessions) {
+				sessions.push({ convId, session: data.session });
+			}
+		}
+		// 如果没有 conversation session，至少列出默认 session
+		if (sessions.length === 0) {
+			sessions.push({
+				convId: 'default',
+				session: session.fromPartition("persist:pi-browser-default")
+			});
+		}
+
+		// 收集所有 session 的 Google cookies
+		const allCookies = [];
+		for (const { convId, session: sess } of sessions) {
+			const cookies = await sess.cookies.get({});
+			const googleCookies = cookies
+				.filter((c) => /google|youtube|gstatic|ggpht|ytimg/.test(c.domain))
+				.map((c) => `[${convId}] ${c.domain} ${c.name} secure=${c.secure?"1":"0"} httpOnly=${c.httpOnly?"1":"0"}`);
+			allCookies.push(...googleCookies);
+		}
+		return allCookies;
 	});
 
 	// 在当前活动 view 里执行 JS（调试用：读登录态等页面内证据）

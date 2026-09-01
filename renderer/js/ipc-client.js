@@ -187,6 +187,17 @@
   };
 
   /**
+   * hover 预取会话消息到主进程缓存（LRU 10 条 / TTL 60s）
+   * 点击时 switchSession 命中缓存直接广播 session_restored，跳过 jsonl 读取。
+   * 静默失败，返回 {ok} 仅供调试。
+   * @param {string} file - 会话文件路径
+   * @returns {Promise<{ok: boolean}>}
+   */
+  IpcClient.prototype.preloadSession = function (file) {
+    return invoke('preloadSession', [file]);
+  };
+
+  /**
    * 删除会话
    * @param {string} file - 会话文件路径
    * @returns {Promise<{ok: boolean, err?: string}>}
@@ -302,6 +313,15 @@
    */
   IpcClient.prototype.setCwd = function (dir) {
     return invoke('setCwd', [dir]);
+  };
+
+  /**
+   * 从最近工作区列表中移除某项（不动 sessions 目录下的历史会话文件）
+   * @param {string} dir - 目录路径
+   * @returns {Promise<{ok: boolean, list?: Array, err?: string}>}
+   */
+  IpcClient.prototype.removeRecentCwd = function (dir) {
+    return invoke('removeRecentCwd', [dir]);
   };
 
   /* =======================================================================

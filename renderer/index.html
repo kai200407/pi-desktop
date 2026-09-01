@@ -87,7 +87,12 @@
             </svg>
           </button>
         </div>
-        <nav id="session-list" class="session-list" aria-label="项目与会话列表"></nav>
+        <!-- 工作区列表滚动容器：占据剩余空间，可垂直滚动 -->
+        <div class="projects-scroll-container">
+          <nav id="session-list" class="session-list" aria-label="项目与会话列表"></nav>
+        </div>
+        <!-- 归档固定容器：固定在左栏底部（用户行之上），不被工作区列表挤出视口 -->
+        <div id="archived-container" class="archived-fixed-container"></div>
       </div>
 
       <!-- 底部用户行：头像 + 名字 + 主题 / 浏览器 / 帮助 -->
@@ -130,6 +135,24 @@
          #center 带 .thread-empty 时：消息流隐藏，输入卡片整体垂直居中（仿 Codex 空状态）；
          有消息后 app.js 摘掉该 class，卡片落回底部。 -->
     <section id="center" class="thread-empty">
+      <!-- 中栏顶部工具栏：工作区选择器 + 新对话按钮 -->
+      <div id="conversation-toolbar" class="conversation-toolbar">
+        <div class="workspace-selector">
+          <button id="workspace-btn" class="workspace-btn" type="button" title="选择工作区">
+            <span class="ws-label">工作区:</span>
+            <span id="ws-name" class="ws-name">加载中...</span>
+            <svg class="ws-arrow" viewBox="0 0 16 16" aria-hidden="true"><polyline points="4,6.5 8,10.5 12,6.5" /></svg>
+          </button>
+        </div>
+        <button id="btn-new-chat-toolbar" class="btn-new-chat" type="button" title="在当前工作区新建对话">
+          <svg viewBox="0 0 16 16" aria-hidden="true" style="width:12px;height:12px;">
+            <line x1="8" y1="3" x2="8" y2="13" />
+            <line x1="3" y1="8" x2="13" y2="8" />
+          </svg>
+          <span>新对话</span>
+        </button>
+      </div>
+
       <div id="thread" class="thread">
         <!-- 置顶摘要横条（P1-8）：compaction 事件后显示「⚡ 上下文已压缩 · 点击展开」，
              展开显示摘要全文，展开态存 localStorage。默认 hidden。 -->
@@ -388,6 +411,9 @@
 
   <div id="thinking-pop" class="popover thinking-pop hidden"></div>
   <div id="cwd-pop" class="popover cwd-pop hidden"></div>
+
+  <!-- 中栏顶部工作区选择器菜单（由 conversation.js 动态填充） -->
+  <div id="workspace-menu" class="popover workspace-menu hidden"></div>
 
   <!-- 斜杠命令补全弹层：输入 / 时弹出，位置由 Conversation._positionAbove 计算 -->
   <div id="command-selector" class="popover command-selector hidden"></div>

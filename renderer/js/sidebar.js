@@ -75,6 +75,14 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  // querySelector 属性值转义：会话 id 是 jsonl 绝对路径，含 / 等字符，
+  // 必须过 CSS.escape（或引号/反斜杠兜底转义）才能安全拼进选择器。
+  function cssEscape(s) {
+    var v = String(s == null ? '' : s);
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(v);
+    return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
   // mtime → 「3 分钟前 / 昨天 / 3 天前 / 12月30日」
   function relTimeDefault(ts) {
     if (!ts) return '';
@@ -369,13 +377,51 @@
       (g.sessions || []).forEach(function (x) { if (x.id === id) s = x; });
     });
     if (!s || this._get('running') || this.isActiveSession(s)) return;
+    console.time('[Perf] 点击到 IPC 返回');
+    this._optimisticSwitch(s);
+    Promise.resolve(this.call('switchSession', s.id))
+      .then(function () {
+        console.timeEnd('[Perf] 点击到 IPC 返回');
+        console.log('[Sidebar] switchSession IPC 成功:', s.id);
+      })
+      .catch(function (err) {
+        console.error('[Sidebar] switchSession IPC 失败:', err);
+        self.hooks.showNotice('加载会话失败');
+      });
+  };
+
+  /* 【性能优化】乐观切换：点击瞬间不等 IPC 返回，立刻完成三件用户可感知的事 ——
+     1) 高亮移动（局部 class 补丁，不重建列表 DOM）；2) 标题更新；3) 对话区清
+     空并铺骨架屏。之后异步调 pi:switchSession，session_restored 到达时
+     restoreSession 整体替换骨架屏。用户感知从「点击后 200-500ms 白等」变为
+     「点击即有反馈」。失败时会话错误事件会落到 conversation.showError。 */
+  Sidebar.prototype._optimisticSwitch = function (s) {
+    var prevId = this._get('activeSessionId');
     this._set('activeSessionId', s.id);
+    this._patchActiveRow(prevId, s.id);
     this.setTitle(this.sessionDisplayName(s));
-    this.hooks.clearThread();
     this._markSwitching(s.id);
-    this.call('switchSession', s.id);
-    // 【性能优化】点击切换会话后不需要立刻重拉列表：高亮已通过 activeSessionId
-    // 局部生效，后续 session_restored / session_cleared 事件会防抖刷新列表。
+    if (typeof this.hooks.showLoadingSkeleton === 'function') {
+      this.hooks.showLoadingSkeleton();
+    } else {
+      this.hooks.clearThread();
+    }
+  };
+
+  /* 【性能优化】高亮局部补丁：只触碰旧/新两行（各一次 querySelector + class
+     切换），不重跑 renderGroups 全量重建（282 行 DOM，15-30ms）。列表结构
+     刷新由 scheduleRefreshSessions 防抖兜底（高亮态以 activeSessionId 为准）。 */
+  Sidebar.prototype._patchActiveRow = function (prevId, nextId) {
+    // 归档行已移出 #session-list 到独立固定容器，查询范围放宽到整个侧栏
+    var root = (this.els && (this.els.sidebar || this.els.sessionList)) || document;
+    if (prevId && prevId !== nextId) {
+      var oldRow = root.querySelector('.session-item[data-sid="' + cssEscape(prevId) + '"]');
+      if (oldRow) oldRow.classList.remove('active');
+    }
+    if (nextId) {
+      var newRow = root.querySelector('.session-item[data-sid="' + cssEscape(nextId) + '"]');
+      if (newRow) newRow.classList.add('active');
+    }
   };
 
   /* 标记「正在切换到某会话」：切换期内主进程可能先广播 session_cleared
@@ -441,6 +487,7 @@
     // 左键：切换到该会话（运行中忽略；已是活动会话时强制刷新）
     b.addEventListener('click', function () {
       console.log('[Sidebar] 会话点击:', s.id);
+      console.time('[Perf] 点击到 IPC 返回');
       if (self._get('running')) {
         console.log('[Sidebar] 忽略点击（运行中）');
         return;
@@ -449,12 +496,10 @@
       if (isActive) {
         console.log('[Sidebar] 强制重新加载当前会话:', s.id);
       }
-      self._set('activeSessionId', s.id);
-      self.setTitle(self.sessionDisplayName(s));
-      self.hooks.clearThread();
-      self._markSwitching(s.id);
-      self.call('switchSession', s.id)
+      self._optimisticSwitch(s);       // 高亮/标题/骨架屏立即生效，不等 IPC
+      Promise.resolve(self.call('switchSession', s.id))
         .then(function() {
+          console.timeEnd('[Perf] 点击到 IPC 返回');
           console.log('[Sidebar] switchSession IPC 成功:', s.id);
         })
         .catch(function(err) {
@@ -463,6 +508,18 @@
         });
       // 【性能优化】点击后高亮已局部生效，列表刷新交给事件流的防抖调用
     });
+    // 【性能优化】悬停 300ms 预取会话数据到主进程缓存；点击时 switchSession
+    // 命中缓存直接广播 session_restored，跳过 jsonl 读取+反序列化（10-30ms）。
+    // 命中与否对点击路径完全透明（_readMessagesCached 缓存读未命中则穿透读盘）。
+    var hoverTimer = null;
+    b.addEventListener('mouseenter', function () {
+      hoverTimer = setTimeout(function () {
+        if (!self._get('running') && !self.isActiveSession(s)) {
+          self.call('preloadSession', s.id);
+        }
+      }, 300);
+    });
+    b.addEventListener('mouseleave', function () { clearTimeout(hoverTimer); });
     return b;
   };
 
@@ -516,6 +573,9 @@
       p.className = 'session-empty';
       p.textContent = q ? '没有匹配的会话' : '暂无项目';
       listEl.appendChild(p);
+      // 清空固定归档容器，避免残留上一次的归档分组
+      var ac0 = document.getElementById('archived-container');
+      if (ac0) { ac0.innerHTML = ''; ac0.classList.toggle('hidden', true); }
       return;
     }
 
@@ -613,13 +673,25 @@
     });
 
     // ===== 底部「已归档 (N)」分组 =====
+    // 归档分组渲染到独立的固定容器 #archived-container（位于左栏底部、
+    // 工作区滚动容器之外），保证工作区再多也不会把归档挤出视口。
+    var archivedContainer = document.getElementById('archived-container');
+    if (!archivedContainer) {
+      console.warn('[Sidebar] archived-container 不存在，归档分组将渲染回工作区列表尾部');
+      archivedContainer = listEl;
+    } else {
+      archivedContainer.innerHTML = '';
+      // 无归档会话时隐藏容器（去掉边框/占位）
+      archivedContainer.classList.toggle('hidden', true);
+    }
     // 汇总跨项目的归档会话（倒序），空则不出；搜索态同样过滤 + 命中高亮。
     var archivedList = this.getArchivedSessionsList();
     if (q) {
       archivedList = archivedList.filter(function (s) { return sessionMatches(s, q); });
     }
     if (archivedList.length) {
-      listEl.appendChild(this.buildArchivedGroup(archivedList));
+      archivedContainer.classList.toggle('hidden', false);
+      archivedContainer.appendChild(this.buildArchivedGroup(archivedList));
     }
   };
 
@@ -646,8 +718,10 @@
     row.title = '已归档的会话（右键可取消归档）';
     row.addEventListener('click', function () {
       var next = !block.classList.contains('collapsed');
-      block.classList.toggle('collapsed', next);
       setArchivedGroupCollapsed(next);
+      // 展开时需要补渲染会话行（折叠态构建时未 append），
+      // 直接重跑 renderGroups（数据在缓存，不走 IPC），与项目折叠同一做法。
+      self.renderGroups();
     });
     block.appendChild(row);
 
@@ -993,7 +1067,8 @@
   // 名字只存 localStorage['pi-session-names']，不改 jsonl 本体。
   Sidebar.prototype.renameSession = function (s) {
     var self = this;
-    var rows = this.els.sessionList.querySelectorAll('.session-item');
+    // 归档行已移出 #session-list 到独立固定容器，查询范围放宽到整个侧栏
+    var rows = (this.els.sidebar || this.els.sessionList).querySelectorAll('.session-item');
     var row = null;
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].dataset && rows[i].dataset.sid === s.id) { row = rows[i]; break; }
@@ -1125,13 +1200,25 @@
     });
   };
 
+  /* 会话切换专用：乐观 UI 状态迁移（高亮/标题/骨架屏），不触发后台事件 */
+  Sidebar.prototype._setActiveUI = function (s) {
+    var prevId = this._get('activeSessionId');
+    this._set('activeSessionId', s.id);
+    this._patchActiveRow(prevId, s.id);
+    this.setTitle(this.sessionDisplayName(s));
+    this._markSwitching(s.id);
+    if (typeof this.hooks.showLoadingSkeleton === 'function') {
+      this.hooks.showLoadingSkeleton();
+    } else {
+      this.hooks.clearThread();
+    }
+  };
+
   // 切到分叉点：切换当前会话指向 + 调主进程 navigateTree
   Sidebar.prototype.switchToBranch = function (s, br, idx) {
     var self = this;
     if (this._get('running')) return;
-    this._set('activeSessionId', s.id);
-    this.setTitle(this.sessionDisplayName(s));
-    this.hooks.clearThread();
+    this._setActiveUI(s);
     this.hooks.showNotice('正在切到分支 ' + idx + '…');
     Promise.resolve(this.call('switchToBranch', {
       file: s.file || s.id,
